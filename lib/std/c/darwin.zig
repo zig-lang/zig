@@ -193,6 +193,8 @@ pub const pthread_attr_t = extern struct {
 
 const pthread_t = std.c.pthread_t;
 pub extern "c" fn pthread_threadid_np(thread: ?pthread_t, thread_id: *u64) c_int;
+pub extern "c" fn pthread_setname_np(name: [*:0]const u8) c_int;
+pub extern "c" fn pthread_getname_np(thread: std.c.pthread_t, name: [*:0]u8, len: usize) c_int;
 
 pub extern "c" fn arc4random_buf(buf: [*]u8, len: usize) void;
 
