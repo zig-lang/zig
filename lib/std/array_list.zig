@@ -66,16 +66,23 @@ pub fn ArrayListAligned(comptime T: type, comptime alignment: ?u29) type {
         pub fn initCapacity(allocator: *Allocator, num: usize) !Self {
             var self = Self.init(allocator);
 
-            const new_memory = try self.allocator.allocAdvanced(T, alignment, num, .at_least);
-            self.items.ptr = new_memory.ptr;
-            self.capacity = new_memory.len;
+            if (@sizeOf(T) > 0) {
+                const new_memory = try self.allocator.allocAdvanced(T, alignment, num, .at_least);
+                self.items.ptr = new_memory.ptr;
+                self.capacity = new_memory.len;
+            } else {
+                // If `T` is a zero-sized type, then we do not need to allocate memory.
+                self.capacity = std.math.maxInt(usize);
+            }
 
             return self;
         }
 
         /// Release all allocated memory.
         pub fn deinit(self: Self) void {
-            self.allocator.free(self.allocatedSlice());
+            if (@sizeOf(T) > 0) {
+                self.allocator.free(self.allocatedSlice());
+            }
         }
 
         pub const span = @compileError("deprecated: use `items` field directly");
@@ -279,13 +286,17 @@ pub fn ArrayListAligned(comptime T: type, comptime alignment: ?u29) type {
         pub fn shrinkAndFree(self: *Self, new_len: usize) void {
             assert(new_len <= self.items.len);
 
-            self.items = self.allocator.realloc(self.allocatedSlice(), new_len) catch |e| switch (e) {
-                error.OutOfMemory => { // no problem, capacity is still correct then.
-                    self.items.len = new_len;
-                    return;
-                },
-            };
-            self.capacity = new_len;
+            if (@sizeOf(T) > 0) {
+                self.items = self.allocator.realloc(self.allocatedSlice(), new_len) catch |e| switch (e) {
+                    error.OutOfMemory => { // no problem, capacity is still correct then.
+                        self.items.len = new_len;
+                        return;
+                    },
+                };
+                self.capacity = new_len;
+            } else {
+                self.items.len = new_len;
+            }
         }
 
         /// Reduce length to `new_len`.
@@ -298,18 +309,22 @@ pub fn ArrayListAligned(comptime T: type, comptime alignment: ?u29) type {
         /// Modify the array so that it can hold at least `new_capacity` items.
         /// Invalidates pointers if additional memory is needed.
         pub fn ensureCapacity(self: *Self, new_capacity: usize) !void {
-            var better_capacity = self.capacity;
-            if (better_capacity >= new_capacity) return;
+            if (@sizeOf(T) > 0) {
+                var better_capacity = self.capacity;
+                if (better_capacity >= new_capacity) return;
 
-            while (true) {
-                better_capacity += better_capacity / 2 + 8;
-                if (better_capacity >= new_capacity) break;
+                while (true) {
+                    better_capacity += better_capacity / 2 + 8;
+                    if (better_capacity >= new_capacity) break;
+                }
+
+                // TODO This can be optimized to avoid needlessly copying undefined memory.
+                const new_memory = try self.allocator.reallocAtLeast(self.allocatedSlice(), better_capacity);
+                self.items.ptr = new_memory.ptr;
+                self.capacity = new_memory.len;
+            } else {
+                self.capacity = std.math.maxInt(usize);
             }
-
-            // TODO This can be optimized to avoid needlessly copying undefined memory.
-            const new_memory = try self.allocator.reallocAtLeast(self.allocatedSlice(), better_capacity);
-            self.items.ptr = new_memory.ptr;
-            self.capacity = new_memory.len;
         }
 
         /// Increases the array's length to match the full capacity that is already allocated.
@@ -1225,4 +1240,24 @@ test "std.ArrayList/ArrayListUnmanaged.toOwnedSliceSentinel" {
         defer a.free(result);
         testing.expectEqualStrings(result, mem.spanZ(result.ptr));
     }
+}
+
+test "std.ArrayList(u0)" {
+    // An ArrayList on zero-sized types should not need to allocate
+    const a = &testing.FailingAllocator.init(testing.allocator, 0).allocator;
+
+    var list = ArrayList(u0).init(a);
+    defer list.deinit();
+
+    try list.append(0);
+    try list.append(0);
+    try list.append(0);
+    testing.expectEqual(list.items.len, 3);
+
+    var count: usize = 0;
+    for (list.items) |x| {
+        testing.expectEqual(x, 0);
+        count += 1;
+    }
+    testing.expectEqual(count, 3);
 }
