@@ -3056,30 +3056,113 @@ fn transMemberExpr(c: *Context, scope: *Scope, stmt: *const clang.MemberExpr, re
     return maybeSuppressResult(c, scope, result_used, node);
 }
 
+/// ptr[subscr] (`subscr` is a signed integer expression, `ptr` a pointer) becomes:
+/// (blk: {
+///     const tmp = subscr;
+///     if (tmp >= 0) break :blk ptr + @intCast(usize, tmp) else break :blk ptr - ~@bitCast(usize, @intCast(isize, tmp) +% -1);
+/// }).*
+/// Todo: rip this out once `[*]T + isize` becomes valid.
+fn transSignedArrayAccess(
+    c: *Context,
+    scope: *Scope,
+    container_expr: *const clang.Expr,
+    subscr_expr: *const clang.Expr,
+    result_used: ResultUsed,
+) TransError!Node {
+    var block_scope = try Scope.Block.init(c, scope, true);
+    defer block_scope.deinit();
+
+    const tmp = try block_scope.makeMangledName(c, "tmp");
+
+    const subscr_node = try transExpr(c, &block_scope.base, subscr_expr, .used);
+    const subscr_decl = try Tag.var_simple.create(c.arena, .{ .name = tmp, .init = subscr_node });
+    try block_scope.statements.append(subscr_decl);
+
+    const tmp_ref = try Tag.identifier.create(c.arena, tmp);
+
+    const container_node = try transExpr(c, &block_scope.base, container_expr, .used);
+
+    const cond_node = try Tag.greater_than_equal.create(c.arena, .{ .lhs = tmp_ref, .rhs = Tag.zero_literal.init() });
+
+    const then_value = try Tag.add.create(c.arena, .{
+        .lhs = container_node,
+        .rhs = try Tag.int_cast.create(c.arena, .{
+            .lhs = try Tag.identifier.create(c.arena, "usize"),
+            .rhs = tmp_ref,
+        }),
+    });
+
+    const then_body = try Tag.break_val.create(c.arena, .{
+        .label = block_scope.label,
+        .val = then_value,
+    });
+
+    const minuend = container_node;
+    const signed_size = try Tag.int_cast.create(c.arena, .{
+        .lhs = try Tag.identifier.create(c.arena, "isize"),
+        .rhs = tmp_ref,
+    });
+    const to_cast = try Tag.add_wrap.create(c.arena, .{
+        .lhs = signed_size,
+        .rhs = try Tag.negate.create(c.arena, Tag.one_literal.init()),
+    });
+    const bitcast_node = try Tag.bit_cast.create(c.arena, .{
+        .lhs = try Tag.identifier.create(c.arena, "usize"),
+        .rhs = to_cast,
+    });
+    const subtrahend = try Tag.bit_not.create(c.arena, bitcast_node);
+    const difference = try Tag.sub.create(c.arena, .{
+        .lhs = minuend,
+        .rhs = subtrahend,
+    });
+    const else_body = try Tag.break_val.create(c.arena, .{
+        .label = block_scope.label,
+        .val = difference,
+    });
+
+    const if_node = try Tag.@"if".create(c.arena, .{
+        .cond = cond_node,
+        .then = then_body,
+        .@"else" = else_body,
+    });
+
+    try block_scope.statements.append(if_node);
+    const block_node = try block_scope.complete(c);
+
+    const derefed = try Tag.deref.create(c.arena, block_node);
+
+    return maybeSuppressResult(c, &block_scope.base, result_used, derefed);
+}
+
 fn transArrayAccess(c: *Context, scope: *Scope, stmt: *const clang.ArraySubscriptExpr, result_used: ResultUsed) TransError!Node {
-    var base_stmt = stmt.getBase();
+    const base_stmt = stmt.getBase();
+    const base_qt = getExprQualType(c, base_stmt);
+    const is_vector = cIsVector(base_qt);
+
+    const subscr_expr = stmt.getIdx();
+    const subscr_qt = getExprQualType(c, subscr_expr);
+    const is_longlong = cIsLongLongInteger(subscr_qt);
+    const is_signed = cIsSignedInteger(subscr_qt);
 
     // Unwrap the base statement if it's an array decayed to a bare pointer type
     // so that we index the array itself
+    var unwrapped_base = base_stmt;
     if (@ptrCast(*const clang.Stmt, base_stmt).getStmtClass() == .ImplicitCastExprClass) {
         const implicit_cast = @ptrCast(*const clang.ImplicitCastExpr, base_stmt);
 
         if (implicit_cast.getCastKind() == .ArrayToPointerDecay) {
-            base_stmt = implicit_cast.getSubExpr();
+            unwrapped_base = implicit_cast.getSubExpr();
         }
     }
 
-    const container_node = try transExpr(c, scope, base_stmt, .used);
+    // Special case: actual pointer (not decayed array) and signed integer subscript
+    // See discussion at https://github.com/ziglang/zig/pull/8589
+    if (is_signed and (base_stmt == unwrapped_base) and !is_vector) return transSignedArrayAccess(c, scope, base_stmt, subscr_expr, result_used);
 
-    // cast if the index is long long or signed
-    const subscr_expr = stmt.getIdx();
-    const qt = getExprQualType(c, subscr_expr);
-    const is_longlong = cIsLongLongInteger(qt);
-    const is_signed = cIsSignedInteger(qt);
-
+    const container_node = try transExpr(c, scope, unwrapped_base, .used);
     const rhs = if (is_longlong or is_signed) blk: {
         // check if long long first so that signed long long doesn't just become unsigned long long
-        var typeid_node = if (is_longlong) try Tag.identifier.create(c.arena, "usize") else try transQualTypeIntWidthOf(c, qt, false);
+        const typeid_node = if (is_longlong) try Tag.identifier.create(c.arena, "usize") else try transQualTypeIntWidthOf(c, subscr_qt, false);
         break :blk try Tag.int_cast.create(c.arena, .{ .lhs = typeid_node, .rhs = try transExpr(c, scope, subscr_expr, .used) });
     } else try transExpr(c, scope, subscr_expr, .used);
 
