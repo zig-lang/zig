@@ -17,8 +17,8 @@ const linux = std.os.linux;
 const Mutex = std.Thread.Mutex;
 const assert = std.debug.assert;
 
-pub fn wait(cond: *Condition, mutex: *Mutex) void {
-    cond.impl.wait(mutex);
+pub fn wait(cond: *Condition, held_mutex: *Mutex.Impl.Held) void {
+    cond.impl.wait(held_mutex);
 }
 
 pub fn signal(cond: *Condition) void {
@@ -39,7 +39,7 @@ else
     AtomicCondition;
 
 pub const SingleThreadedCondition = struct {
-    pub fn wait(cond: *SingleThreadedCondition, mutex: *Mutex) void {
+    pub fn wait(cond: *SingleThreadedCondition, held_mutex: *Mutex.Impl.Held) void {
         unreachable; // deadlock detected
     }
 
@@ -51,10 +51,10 @@ pub const SingleThreadedCondition = struct {
 pub const WindowsCondition = struct {
     cond: windows.CONDITION_VARIABLE = windows.CONDITION_VARIABLE_INIT,
 
-    pub fn wait(cond: *WindowsCondition, mutex: *Mutex) void {
+    pub fn wait(cond: *WindowsCondition, held_mutex: *Mutex.Impl.Held) void {
         const rc = windows.kernel32.SleepConditionVariableSRW(
             &cond.cond,
-            &mutex.srwlock,
+            &held_mutex.mutex.srwlock,
             windows.INFINITE,
             @as(windows.ULONG, 0),
         );
@@ -73,8 +73,8 @@ pub const WindowsCondition = struct {
 pub const PthreadCondition = struct {
     cond: std.c.pthread_cond_t = .{},
 
-    pub fn wait(cond: *PthreadCondition, mutex: *Mutex) void {
-        const rc = std.c.pthread_cond_wait(&cond.cond, &mutex.impl.pthread_mutex);
+    pub fn wait(cond: *PthreadCondition, held_mutex: *Mutex.Impl.Held) void {
+        const rc = std.c.pthread_cond_wait(&cond.cond, &held_mutex.mutex.pthread_mutex);
         assert(rc == 0);
     }
 
@@ -140,7 +140,7 @@ pub const AtomicCondition = struct {
         }
     };
 
-    pub fn wait(cond: *AtomicCondition, mutex: *Mutex) void {
+    pub fn wait(cond: *AtomicCondition, held_mutex: *Mutex.Impl.Held) void {
         var waiter = QueueList.Node{ .data = .{} };
 
         {
@@ -151,9 +151,9 @@ pub const AtomicCondition = struct {
             @atomicStore(bool, &cond.pending, true, .SeqCst);
         }
 
-        mutex.unlock();
+        held_mutex.release();
         waiter.data.wait();
-        mutex.lock();
+        held_mutex.* = held_mutex.mutex.acquire();
     }
 
     pub fn signal(cond: *AtomicCondition) void {
@@ -192,3 +192,98 @@ pub const AtomicCondition = struct {
             waiter.data.notify();
     }
 };
+
+test "Condition.signal" {
+    if (std.builtin.single_threaded) {
+        return;
+    }
+
+    const Signal = struct {
+        notified: bool = false,
+        mutex: Mutex = .{},
+        cond: Condition = .{},
+
+        fn wait(self: *@This()) void {
+            var held = self.mutex.acquire();
+            defer held.release();
+
+            while (!self.notified)
+                self.cond.wait(&held);
+        }
+
+        fn notify(self: *@This()) void {
+            var held = self.mutex.acquire();
+            defer held.release();
+
+            self.notified = true;
+            self.cond.signal();
+        }
+    };
+
+    const SignalThread = struct {
+        signals: []Signal,
+        index: usize,
+
+        fn run(self: @This()) void {
+            self.signals[self.index].wait();
+            self.signals[(self.index + 1) % self.signals.len].notify();
+        }
+    };
+
+    var signals = [_]Signal{.{}} ** 4;
+    var threads = [_]*std.Thread{undefined} ** signals.len;
+
+    for (threads) |*t, index| {
+        t.* = try std.Thread.spawn(SignalThread.run, .{
+            .signals = &signals,
+            .index = index,
+        });
+    }
+
+    signals[0].notify();
+
+    for (threads) |t| {
+        t.wait();
+    }
+}
+
+test "Condition.broadcast" {
+    if (std.builtin.single_threaded) {
+        return;
+    }
+
+    const Barrier = struct {
+        count: usize,
+        mutex: Mutex = .{},
+        cond: Condition = .{},
+
+        fn wait(self: *@This()) void {
+            var held = self.mutex.acquire();
+            defer held.release();
+
+            assert(self.count > 0);
+            self.count -= 1;
+
+            if (self.count == 0) {
+                self.cond.broadcast();
+                return;
+            }
+
+            while (self.count != 0) {
+                self.cond.wait(&held);
+            }
+        }
+    };
+    
+    var threads = [_]*std.Thread{undefined} ** 10;
+    var barrier = Barrier{ .count = threads.len };
+
+    for (threads) |*t| t.* = try std.Thread.spawn(Barrier.wait, &barrier);
+    for (threads) |t| t.wait();
+
+    try std.testing.expectEqual(@as(usize, 0), blk: {
+        const held = barrier.mutex.acquire();
+        defer held.release();
+        break :blk barrier.count;
+    });
+}

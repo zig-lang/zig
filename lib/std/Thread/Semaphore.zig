@@ -8,32 +8,67 @@
 //! the number would become negative.
 //! This API supports static initialization and does not require deinitialization.
 
-mutex: Mutex = .{},
-cond: Condition = .{},
-/// It is OK to initialize this field to any value.
-permits: usize = 0,
-
-const Semaphore = @This();
 const std = @import("../std.zig");
 const Mutex = std.Thread.Mutex;
 const Condition = std.Thread.Condition;
 
-pub fn wait(sem: *Semaphore) void {
-    const held = sem.mutex.acquire();
+const Semaphore = @This();
+
+permits: usize = 0,
+mutex: Mutex = .{},
+cond: Condition = .{},
+
+pub fn wait(self: *Semaphore) void {
+    var held = self.mutex.acquire();
     defer held.release();
 
-    while (sem.permits == 0)
-        sem.cond.wait(&sem.mutex);
+    while (self.permits == 0) {
+        self.cond.wait(&held);
+    }
 
-    sem.permits -= 1;
-    if (sem.permits > 0)
-        sem.cond.signal();
+    self.permits -= 1;
+    if (self.permits > 0) {
+        self.cond.signal();
+    }
 }
 
-pub fn post(sem: *Semaphore) void {
-    const held = sem.mutex.acquire();
+pub fn post(self: *Semaphore) void {
+    const held = self.mutex.acquire();
     defer held.release();
 
-    sem.permits += 1;
-    sem.cond.signal();
+    self.permits += 1;
+    self.cond.signal();
+}
+
+test "Semaphore" {
+    if (std.builtin.single_threaded) {
+        return;
+    }
+
+    const Relay = struct {
+        request: Semaphore = .{},
+        reply: Semaphore = .{},
+
+        fn ping(self: *@This()) void {
+            self.request.post();
+            self.reply.wait();
+        }
+
+        fn pong(self: *@This()) void {
+            self.request.wait();
+            self.reply.post();
+        }
+    };
+
+    var relay = Relay{};
+    var threads = [_]*std.Thread{undefined} ** 8;
+
+    for (threads) |*t| 
+        t.* = try std.Thread.spawn(Relay.pong, &relay);
+
+    for (threads) |_|
+        relay.ping();
+
+    for (threads) |t| 
+        t.wait();
 }

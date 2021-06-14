@@ -50,7 +50,7 @@ pub fn acquire(m: *Mutex) Impl.Held {
     return m.impl.acquire();
 }
 
-const Impl = if (builtin.single_threaded)
+pub const Impl = if (builtin.single_threaded)
     Dummy
 else if (builtin.os.tag == .windows)
     WindowsMutex
