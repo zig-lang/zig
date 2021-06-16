@@ -23,6 +23,7 @@ pub const DynamicBitSetUnmanaged = bit_set.DynamicBitSetUnmanaged;
 pub const EnumArray = enums.EnumArray;
 pub const EnumMap = enums.EnumMap;
 pub const EnumSet = enums.EnumSet;
+pub const FixedSlice = @import("fixed_slice.zig").FixedSlice;
 pub const HashMap = hash_map.HashMap;
 pub const HashMapUnmanaged = hash_map.HashMapUnmanaged;
 pub const MultiArrayList = @import("multi_array_list.zig").MultiArrayList;
