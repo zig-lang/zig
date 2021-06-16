@@ -2716,6 +2716,9 @@ pub const StringifyOptions = struct {
 
     string: StringOptions = StringOptions{ .String = .{} },
 
+    /// Should default values be written?
+    emit_defaults: bool = true,
+
     /// Should []u8 be serialised as a string? or an array?
     pub const StringOptions = union(enum) {
         Array,
@@ -2810,32 +2813,41 @@ pub fn stringify(
             }
 
             try out_stream.writeByte('{');
-            comptime var field_output = false;
+            var field_output = false;
             var child_options = options;
             if (child_options.whitespace) |*child_whitespace| {
                 child_whitespace.indent_level += 1;
             }
-            inline for (S.fields) |Field, field_i| {
+            inline for (S.fields) |field, field_i| {
                 // don't include void fields
-                if (Field.field_type == void) continue;
+                if (field.field_type == void) continue;
 
-                if (!field_output) {
-                    field_output = true;
-                } else {
-                    try out_stream.writeByte(',');
-                }
-                if (child_options.whitespace) |child_whitespace| {
-                    try out_stream.writeByte('\n');
-                    try child_whitespace.outputIndent(out_stream);
-                }
-                try stringify(Field.name, options, out_stream);
-                try out_stream.writeByte(':');
-                if (child_options.whitespace) |child_whitespace| {
-                    if (child_whitespace.separator) {
-                        try out_stream.writeByte(' ');
+                var emit_field = true;
+                if (field.default_value) |default_value| {
+                    if (!options.emit_defaults) {
+                        emit_field = !parsedEqual(default_value, @field(value, field.name));
                     }
                 }
-                try stringify(@field(value, Field.name), child_options, out_stream);
+
+                if (emit_field) {
+                    if (!field_output) {
+                        field_output = true;
+                    } else {
+                        try out_stream.writeByte(',');
+                    }
+                    if (child_options.whitespace) |child_whitespace| {
+                        try out_stream.writeByte('\n');
+                        try child_whitespace.outputIndent(out_stream);
+                    }
+                    try stringify(field.name, options, out_stream);
+                    try out_stream.writeByte(':');
+                    if (child_options.whitespace) |child_whitespace| {
+                        if (child_whitespace.separator) {
+                            try out_stream.writeByte(' ');
+                        }
+                    }
+                    try stringify(@field(value, field.name), child_options, out_stream);
+                }
             }
             if (field_output) {
                 if (options.whitespace) |whitespace| {
@@ -3123,4 +3135,41 @@ test "stringify struct with custom stringifier" {
 
 test "stringify vector" {
     try teststringify("[1,1]", @splat(2, @as(u32, 1)), StringifyOptions{});
+}
+
+test "stringify emit_defaults" {
+    const MyStruct = struct {
+        no_default: []const u8,
+        has_default: []const u8 = "something",
+        null_default: ?[]const u8 = null,
+    };
+
+    try teststringify(
+        \\{"no_default":"foo","has_default":"something","null_default":null}
+    ,
+        MyStruct{.no_default = "foo"},
+        StringifyOptions{ .emit_defaults = true },
+    );
+
+    try teststringify(
+        \\{"no_default":"foo"}
+    ,
+        MyStruct{.no_default = "foo"},
+        StringifyOptions{ .emit_defaults = false },
+    );
+
+    var something = "something".*; // a copy on the stack to get a different address
+    try teststringify(
+        \\{"no_default":"foo"}
+    ,
+        MyStruct{.no_default = "foo", .has_default = &something},
+        StringifyOptions{ .emit_defaults = false },
+    );
+
+    try teststringify(
+        \\{"no_default":"foo","has_default":"other","null_default":"not null"}
+    ,
+        MyStruct{.no_default = "foo", .has_default = "other", .null_default = "not null"},
+        StringifyOptions{ .emit_defaults = false },
+    );
 }
