@@ -7635,8 +7635,14 @@ fn resolvePeerTypes(sema: *Sema, block: *Scope.Block, src: LazySrcLoc, instructi
             continue;
         }
 
-        // TODO error notes pointing out each type
-        return sema.mod.fail(&block.base, src, "incompatible types: '{}' and '{}'", .{ chosen.ty, candidate.ty });
+        const msg = msg: {
+            const msg = try sema.mod.errMsg(&block.base, src, "incompatible types: '{}' and '{}'", .{ chosen.ty, candidate.ty });
+            errdefer msg.destroy(sema.gpa);
+            try sema.mod.errNote(&block.base, chosen.src, msg, "type '{}' here", .{chosen.ty});
+            try sema.mod.errNote(&block.base, candidate.src, msg, "type '{}' here", .{candidate.ty});
+            break :msg msg;
+        };
+        return sema.mod.failWithOwnedErrorMsg(&block.base, msg);
     }
 
     return chosen.ty;
