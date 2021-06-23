@@ -1370,7 +1370,7 @@ fn zirResolveInferredAlloc(sema: *Sema, block: *Scope.Block, inst: Zir.Inst.Inde
     const ptr_val = ptr.castTag(.constant).?.val;
     const inferred_alloc = ptr_val.castTag(.inferred_alloc).?;
     const peer_inst_list = inferred_alloc.data.stored_inst_list.items;
-    const final_elem_ty = try sema.resolvePeerTypes(block, ty_src, peer_inst_list);
+    const final_elem_ty = try sema.resolvePeerTypes(block, ty_src, peer_inst_list, null);
     const var_is_mut = switch (ptr.ty.tag()) {
         .inferred_alloc_const => false,
         .inferred_alloc_mut => true,
@@ -1956,7 +1956,7 @@ fn analyzeBlockBody(
     // Need to set the type and emit the Block instruction. This allows machine code generation
     // to emit a jump instruction to after the block when it encounters the break.
     try parent_block.instructions.append(sema.gpa, &merges.block_inst.base);
-    const resolved_ty = try sema.resolvePeerTypes(parent_block, src, merges.results.items);
+    const resolved_ty = try sema.resolvePeerTypes(parent_block, src, merges.results.items, null);
     merges.block_inst.base.ty = resolved_ty;
     merges.block_inst.body = .{
         .instructions = try sema.arena.dupe(*Inst, child_block.instructions.items),
@@ -4607,7 +4607,7 @@ fn zirBitwise(
     const rhs = try sema.resolveInst(extra.rhs);
 
     const instructions = &[_]*Inst{ lhs, rhs };
-    const resolved_type = try sema.resolvePeerTypes(block, src, instructions);
+    const resolved_type = try sema.resolvePeerTypes(block, src, instructions, null);
     const casted_lhs = try sema.coerce(block, resolved_type, lhs, lhs_src);
     const casted_rhs = try sema.coerce(block, resolved_type, rhs, rhs_src);
 
@@ -4736,7 +4736,7 @@ fn analyzeArithmetic(
     rhs_src: LazySrcLoc,
 ) InnerError!*Inst {
     const instructions = &[_]*Inst{ lhs, rhs };
-    const resolved_type = try sema.resolvePeerTypes(block, src, instructions);
+    const resolved_type = try sema.resolvePeerTypes(block, src, instructions, null);
     const casted_lhs = try sema.coerce(block, resolved_type, lhs, lhs_src);
     const casted_rhs = try sema.coerce(block, resolved_type, rhs, rhs_src);
 
@@ -5010,7 +5010,7 @@ fn zirCmp(
     }
 
     const instructions = &[_]*Inst{ lhs, rhs };
-    const resolved_type = try sema.resolvePeerTypes(block, src, instructions);
+    const resolved_type = try sema.resolvePeerTypes(block, src, instructions, null);
     if (!resolved_type.isSelfComparable(is_equality_cmp)) {
         return mod.fail(&block.base, src, "operator not allowed for type '{}'", .{resolved_type});
     }
@@ -5180,7 +5180,7 @@ fn zirTypeofPeer(
         inst_list[i] = try sema.resolveInst(arg_ref);
     }
 
-    const result_type = try sema.resolvePeerTypes(block, src, inst_list);
+    const result_type = try sema.resolvePeerTypes(block, src, inst_list, extra.data.src_node);
     return sema.mod.constType(sema.arena, src, result_type);
 }
 
@@ -7568,7 +7568,43 @@ fn wrapErrorUnion(sema: *Sema, block: *Scope.Block, dest_type: Type, inst: *Inst
     }
 }
 
-fn resolvePeerTypes(sema: *Sema, block: *Scope.Block, src: LazySrcLoc, instructions: []*Inst) !Type {
+fn resolveTypeOfArgSrcLoc(
+    gpa: *Allocator,
+    decl: *Decl,
+    typeof_builtin_call_node_offset: i32,
+    candidates: usize,
+    candidate_i: usize,
+) LazySrcLoc {
+    @setCold(true);
+    if (candidates <= 2) {
+        switch (candidate_i) {
+            0 => return LazySrcLoc{ .node_offset_builtin_call_arg0 = typeof_builtin_call_node_offset },
+            1 => return LazySrcLoc{ .node_offset_builtin_call_arg1 = typeof_builtin_call_node_offset },
+            else => unreachable,
+        }
+    }
+
+    const tree = decl.namespace.file_scope.getTree(gpa) catch |err| {
+        // In this case we emit a warning + a less precise source location.
+        log.warn("unable to load {s}: {s}", .{
+            decl.namespace.file_scope.sub_file_path, @errorName(err),
+        });
+        return LazySrcLoc{ .node_offset = 0 };
+    };
+    const node = decl.relativeToNodeIndex(typeof_builtin_call_node_offset);
+    const node_datas = tree.nodes.items(.data);
+    const params = tree.extra_data[node_datas[node].lhs..node_datas[node].rhs];
+
+    return LazySrcLoc{ .node_abs = params[candidate_i] };
+}
+
+fn resolvePeerTypes(
+    sema: *Sema,
+    block: *Scope.Block,
+    src: LazySrcLoc,
+    instructions: []*Inst,
+    typeof_builtin_call_node_offset: ?i32,
+) !Type {
     if (instructions.len == 0)
         return Type.initTag(.noreturn);
 
@@ -7578,19 +7614,22 @@ fn resolvePeerTypes(sema: *Sema, block: *Scope.Block, src: LazySrcLoc, instructi
     const target = sema.mod.getTarget();
 
     var chosen = instructions[0];
-    for (instructions[1..]) |candidate| {
+    var chosen_i: usize = 0;
+    for (instructions[1..]) |candidate, candidate_i| {
         if (candidate.ty.eql(chosen.ty))
             continue;
         if (candidate.ty.zigTypeTag() == .NoReturn)
             continue;
         if (chosen.ty.zigTypeTag() == .NoReturn) {
             chosen = candidate;
+            chosen_i = candidate_i + 1;
             continue;
         }
         if (candidate.ty.zigTypeTag() == .Undefined)
             continue;
         if (chosen.ty.zigTypeTag() == .Undefined) {
             chosen = candidate;
+            chosen_i = candidate_i + 1;
             continue;
         }
         if (chosen.ty.isInt() and
@@ -7599,18 +7638,21 @@ fn resolvePeerTypes(sema: *Sema, block: *Scope.Block, src: LazySrcLoc, instructi
         {
             if (chosen.ty.intInfo(target).bits < candidate.ty.intInfo(target).bits) {
                 chosen = candidate;
+                chosen_i = candidate_i + 1;
             }
             continue;
         }
         if (chosen.ty.isFloat() and candidate.ty.isFloat()) {
             if (chosen.ty.floatBits(target) < candidate.ty.floatBits(target)) {
                 chosen = candidate;
+                chosen_i = candidate_i + 1;
             }
             continue;
         }
 
         if (chosen.ty.zigTypeTag() == .ComptimeInt and candidate.ty.isInt()) {
             chosen = candidate;
+            chosen_i = candidate_i + 1;
             continue;
         }
 
@@ -7620,6 +7662,7 @@ fn resolvePeerTypes(sema: *Sema, block: *Scope.Block, src: LazySrcLoc, instructi
 
         if (chosen.ty.zigTypeTag() == .ComptimeFloat and candidate.ty.isFloat()) {
             chosen = candidate;
+            chosen_i = candidate_i + 1;
             continue;
         }
 
@@ -7632,14 +7675,25 @@ fn resolvePeerTypes(sema: *Sema, block: *Scope.Block, src: LazySrcLoc, instructi
         }
         if (chosen.ty.zigTypeTag() == .EnumLiteral and candidate.ty.zigTypeTag() == .Enum) {
             chosen = candidate;
+            chosen_i = candidate_i + 1;
             continue;
+        }
+
+        // At this point, we hit a compile error. If the call to
+        // resolvePeerTypes originated from the @TypeOf builtin, we
+        // need to recover the source locations
+        var chosen_src = chosen.src;
+        var candidate_src = candidate.src;
+        if (typeof_builtin_call_node_offset) |node_offset| {
+            chosen_src = resolveTypeOfArgSrcLoc(sema.gpa, block.src_decl, node_offset, instructions.len, chosen_i);
+            candidate_src = resolveTypeOfArgSrcLoc(sema.gpa, block.src_decl, node_offset, instructions.len, candidate_i + 1);
         }
 
         const msg = msg: {
             const msg = try sema.mod.errMsg(&block.base, src, "incompatible types: '{}' and '{}'", .{ chosen.ty, candidate.ty });
             errdefer msg.destroy(sema.gpa);
-            try sema.mod.errNote(&block.base, chosen.src, msg, "type '{}' here", .{chosen.ty});
-            try sema.mod.errNote(&block.base, candidate.src, msg, "type '{}' here", .{candidate.ty});
+            try sema.mod.errNote(&block.base, chosen_src, msg, "type '{}' here", .{chosen.ty});
+            try sema.mod.errNote(&block.base, candidate_src, msg, "type '{}' here", .{candidate.ty});
             break :msg msg;
         };
         return sema.mod.failWithOwnedErrorMsg(&block.base, msg);

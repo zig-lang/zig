@@ -287,7 +287,11 @@ pub fn addCases(ctx: *TestContext) !void {
             \\pub fn main() void {
             \\    _ = @TypeOf(true, 1);
             \\}
-        , &[_][]const u8{":2:9: error: incompatible types: 'bool' and 'comptime_int'"});
+        , &[_][]const u8{
+            ":2:9: error: incompatible types: 'bool' and 'comptime_int'",
+            ":2:17: note: type 'bool' here",
+            ":2:23: note: type 'comptime_int' here",
+        });
     }
 
     {
