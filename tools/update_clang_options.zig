@@ -376,6 +376,14 @@ const known_options = [_]KnownOpt{
         .name = "mexec-model",
         .ident = "exec_model",
     },
+    .{
+        .name = "x",
+        .ident = "force_language",
+    },
+    .{
+        .name = "language",
+        .ident = "force_language",
+    },
 };
 
 const blacklisted_options = [_][]const u8{};

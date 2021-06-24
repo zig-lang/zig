@@ -617,6 +617,7 @@ fn buildOutputType(
     var major_subsystem_version: ?u32 = null;
     var minor_subsystem_version: ?u32 = null;
     var wasi_exec_model: ?wasi_libc.CRTFile = null;
+    var file_language: ?Compilation.FileLanguage = null;
 
     var system_libs = std.ArrayList([]const u8).init(gpa);
     defer system_libs.deinit();
@@ -1072,7 +1073,7 @@ fn buildOutputType(
                     .object, .static_library, .shared_library => {
                         try link_objects.append(arg);
                     },
-                    .assembly, .c, .cpp, .h, .ll, .bc => {
+                    .assembly, .c, .i, .h, .cpp, .cppm, .ii, .m, .mi, .mm, .mii, .cl, .cu, .cui, .ast, .pcm, .ll, .bc => {
                         try c_source_files.append(.{
                             .src_path = arg,
                             .extra_flags = try arena.dupe([]const u8, extra_cflags.items),
@@ -1133,9 +1134,14 @@ fn buildOutputType(
                         try clang_argv.appendSlice(it.other_args);
                     },
                     .positional => {
-                        const file_ext = Compilation.classifyFileExt(mem.spanZ(it.only_arg));
+                        const file_ext = blk: {
+                            if (file_language == null)
+                                break :blk Compilation.classifyFileExt(mem.spanZ(it.only_arg))
+                            else
+                                break :blk file_language.?.toFileExt();
+                        };
                         switch (file_ext) {
-                            .assembly, .c, .cpp, .ll, .bc, .h => try c_source_files.append(.{ .src_path = it.only_arg }),
+                            .assembly, .c, .i, .cpp, .cppm, .ii, .m, .mi, .mm, .mii, .cl, .cu, .cui, .ast, .pcm, .ll, .bc, .h => try c_source_files.append(.{ .src_path = it.only_arg }),
                             .unknown, .shared_library, .object, .static_library => {
                                 try link_objects.append(it.only_arg);
                             },
@@ -1276,6 +1282,60 @@ fn buildOutputType(
                         } else if (std.mem.eql(u8, it.only_arg, "command")) {
                             wasi_exec_model = .crt1_command_o;
                         }
+                    },
+                    .force_language => {
+                        if (mem.eql(u8, it.only_arg, "assembler-with-cpp")) {
+                            file_language = .assembly;
+                        } else if (mem.eql(u8, it.only_arg, "c")) {
+                            file_language = .c;
+                        } else if (mem.eql(u8, it.only_arg, "cpp-output")) {
+                            file_language = .preprocessed_c;
+                        } else if (mem.eql(u8, it.only_arg, "cl")) {
+                            file_language = .cl;
+                        } else if (mem.eql(u8, it.only_arg, "cuda")) {
+                            file_language = .cuda;
+                        } else if (mem.eql(u8, it.only_arg, "cuda-cpp-output")) {
+                            file_language = .preprocessed_cuda;
+                        } else if (mem.eql(u8, it.only_arg, "hip")) {
+                            file_language = .hip;
+                        } else if (mem.eql(u8, it.only_arg, "hip-cpp-output")) {
+                            file_language = .preprocessed_hip;
+                        } else if (mem.eql(u8, it.only_arg, "objective-c")) {
+                            file_language = .objective_c;
+                        } else if (mem.eql(u8, it.only_arg, "objective-c-cpp-output") or
+                            mem.eql(u8, it.only_arg, "objc-cpp-output"))
+                        {
+                            file_language = .preprocessed_objective_c;
+                        } else if (mem.eql(u8, it.only_arg, "c++")) {
+                            file_language = .cpp;
+                        } else if (mem.eql(u8, it.only_arg, "c++-cpp-output")) {
+                            file_language = .preprocessed_cpp;
+                        } else if (mem.eql(u8, it.only_arg, "objective-c++")) {
+                            file_language = .objective_cpp;
+                        } else if (mem.eql(u8, it.only_arg, "objective-c++-cpp-output") or
+                            mem.eql(u8, it.only_arg, "objc++-cpp-output"))
+                        {
+                            file_language = .preprocessed_objective_cpp;
+                        } else if (mem.eql(u8, it.only_arg, "")) {
+                            file_language = .preprocessed_objective_cpp;
+                        } else if (mem.eql(u8, it.only_arg, "c-header")) {
+                            file_language = .c_header;
+                        } else if (mem.eql(u8, it.only_arg, "cl-header")) {
+                            file_language = .cl_header;
+                        } else if (mem.eql(u8, it.only_arg, "objective-c-header")) {
+                            file_language = .objective_c_header;
+                        } else if (mem.eql(u8, it.only_arg, "c++-module")) {
+                            file_language = .cpp_module;
+                        } else if (mem.eql(u8, it.only_arg, "ast")) {
+                            file_language = .ast;
+                        } else if (mem.eql(u8, it.only_arg, "pcm")) {
+                            file_language = .module_file;
+                        } else if (mem.eql(u8, it.only_arg, "ir")) {
+                            file_language = .llvm_ir;
+                        } else {
+                            fatal("unsupported value '{s}' for -x or --language option", .{it.only_arg});
+                        }
+                        try clang_argv.appendSlice(it.other_args);
                     },
                 }
             }
@@ -3461,6 +3521,7 @@ pub const ClangArgIterator = struct {
         no_red_zone,
         strip,
         exec_model,
+        force_language,
     };
 
     const Args = struct {
