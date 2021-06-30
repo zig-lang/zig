@@ -964,18 +964,6 @@ fn linkWithZld(self: *MachO, comp: *Compilation) !void {
     }
 }
 
-fn darwinArchString(arch: std.Target.Cpu.Arch) []const u8 {
-    return switch (arch) {
-        .aarch64, .aarch64_be, .aarch64_32 => "arm64",
-        .thumb, .arm => "arm",
-        .thumbeb, .armeb => "armeb",
-        .powerpc => "ppc",
-        .powerpc64 => "ppc64",
-        .powerpc64le => "ppc64le",
-        else => @tagName(arch),
-    };
-}
-
 pub fn deinit(self: *MachO) void {
     if (self.d_sym) |*ds| {
         ds.deinit(self.base.allocator);
