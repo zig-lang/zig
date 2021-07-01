@@ -26,6 +26,7 @@ const target_util = @import("../target.zig");
 const DebugSymbols = @import("MachO/DebugSymbols.zig");
 const Trie = @import("MachO/Trie.zig");
 const CodeSignature = @import("MachO/CodeSignature.zig");
+const StringTable = @import("MachO/StringTable.zig");
 const Zld = @import("MachO/Zld.zig");
 
 usingnamespace @import("MachO/commands.zig");
@@ -116,9 +117,7 @@ offset_table_free_list: std.ArrayListUnmanaged(u32) = .{},
 
 stub_helper_stubs_start_off: ?u64 = null,
 
-/// Table of symbol names aka the string table.
-string_table: std.ArrayListUnmanaged(u8) = .{},
-string_table_directory: std.StringHashMapUnmanaged(u32) = .{},
+strtab: StringTable = undefined,
 
 /// Table of GOT entries.
 offset_table: std.ArrayListUnmanaged(GOTEntry) = .{},
@@ -131,9 +130,9 @@ rebase_info_dirty: bool = false,
 binding_info_dirty: bool = false,
 lazy_binding_info_dirty: bool = false,
 export_info_dirty: bool = false,
-string_table_dirty: bool = false,
 
-string_table_needs_relocation: bool = false,
+strtab_dirty: bool = false,
+strtab_needs_relocation: bool = false,
 
 /// A list of text blocks that have surplus capacity. This list can have false
 /// positives, as functions grow and shrink over time, only sometimes being added
@@ -413,6 +412,7 @@ pub fn openPath(allocator: *Allocator, sub_path: []const u8, options: link.Optio
 
 pub fn createEmpty(gpa: *Allocator, options: link.Options) !*MachO {
     const self = try gpa.create(MachO);
+
     self.* = .{
         .base = .{
             .tag = .macho,
@@ -421,7 +421,9 @@ pub fn createEmpty(gpa: *Allocator, options: link.Options) !*MachO {
             .file = null,
         },
         .page_size = if (options.target.cpu.arch == .aarch64) 0x4000 else 0x1000,
+        .strtab = try StringTable.init(gpa),
     };
+
     return self;
 }
 
@@ -499,8 +501,8 @@ pub fn flushModule(self: *MachO, comp: *Compilation) !void {
     assert(!self.binding_info_dirty);
     assert(!self.lazy_binding_info_dirty);
     assert(!self.export_info_dirty);
-    assert(!self.string_table_dirty);
-    assert(!self.string_table_needs_relocation);
+    assert(!self.strtab_dirty);
+    assert(!self.strtab_needs_relocation);
 
     if (target.cpu.arch == .aarch64) {
         switch (output_mode) {
@@ -977,14 +979,7 @@ pub fn deinit(self: *MachO) void {
     self.text_block_free_list.deinit(self.base.allocator);
     self.offset_table.deinit(self.base.allocator);
     self.offset_table_free_list.deinit(self.base.allocator);
-    {
-        var it = self.string_table_directory.keyIterator();
-        while (it.next()) |key| {
-            self.base.allocator.free(key.*);
-        }
-    }
-    self.string_table_directory.deinit(self.base.allocator);
-    self.string_table.deinit(self.base.allocator);
+    self.strtab.deinit();
     self.globals.deinit(self.base.allocator);
     self.globals_free_list.deinit(self.base.allocator);
     self.locals.deinit(self.base.allocator);
@@ -1202,7 +1197,7 @@ pub fn updateDecl(self: *MachO, module: *Module, decl: *Module.Decl) !void {
         const new_name = try std.fmt.allocPrint(self.base.allocator, "_{s}", .{mem.spanZ(decl.name)});
         defer self.base.allocator.free(new_name);
 
-        symbol.n_strx = try self.updateString(symbol.n_strx, new_name);
+        symbol.n_strx = try self.strtab.getOrPut(new_name);
         symbol.n_type = macho.N_SECT;
         symbol.n_sect = @intCast(u8, self.text_section_index.?) + 1;
         symbol.n_desc = 0;
@@ -1214,7 +1209,7 @@ pub fn updateDecl(self: *MachO, module: *Module, decl: *Module.Decl) !void {
         const decl_name = try std.fmt.allocPrint(self.base.allocator, "_{s}", .{mem.spanZ(decl.name)});
         defer self.base.allocator.free(decl_name);
 
-        const name_str_index = try self.makeString(decl_name);
+        const name_str_index = try self.strtab.getOrPut(decl_name);
         const addr = try self.allocateTextBlock(&decl.link.macho, code.len, required_alignment);
 
         log.debug("allocated text block for {s} at 0x{x}", .{ decl_name, addr });
@@ -1404,14 +1399,14 @@ pub fn updateDeclExports(
         if (exp.link.macho.sym_index) |i| {
             const sym = &self.globals.items[i];
             sym.* = .{
-                .n_strx = try self.updateString(sym.n_strx, exp_name),
+                .n_strx = try self.strtab.getOrPut(exp_name),
                 .n_type = n_type,
                 .n_sect = @intCast(u8, self.text_section_index.?) + 1,
                 .n_desc = n_desc,
                 .n_value = decl_sym.n_value,
             };
         } else {
-            const name_str_index = try self.makeString(exp_name);
+            const name_str_index = try self.strtab.getOrPut(exp_name);
             const i = if (self.globals_free_list.popOrNull()) |i| i else blk: {
                 _ = self.globals.addOneAssumeCapacity();
                 self.export_info_dirty = true;
@@ -1787,15 +1782,14 @@ pub fn populateMissingMetadata(self: *MachO) !void {
         symtab.symoff = @intCast(u32, symtab_off);
         symtab.nsyms = @intCast(u32, self.base.options.symbol_count_hint);
 
-        try self.string_table.append(self.base.allocator, 0); // Need a null at position 0.
-        const strtab_size = self.string_table.items.len;
+        const strtab_size = self.strtab.size();
         const strtab_off = self.findFreeSpaceLinkedit(strtab_size, 1, symtab_off);
         log.debug("found string table free space 0x{x} to 0x{x}", .{ strtab_off, strtab_off + strtab_size });
         symtab.stroff = @intCast(u32, strtab_off);
         symtab.strsize = @intCast(u32, strtab_size);
 
         self.load_commands_dirty = true;
-        self.string_table_dirty = true;
+        self.strtab_dirty = true;
     }
     if (self.dysymtab_cmd_index == null) {
         self.dysymtab_cmd_index = @intCast(u16, self.load_commands.items.len);
@@ -1930,7 +1924,7 @@ pub fn populateMissingMetadata(self: *MachO) !void {
     if (!self.nonlazy_imports.contains("dyld_stub_binder")) {
         const index = @intCast(u32, self.nonlazy_imports.count());
         const name = try self.base.allocator.dupe(u8, "dyld_stub_binder");
-        const offset = try self.makeString("dyld_stub_binder");
+        const offset = try self.strtab.getOrPut("dyld_stub_binder");
         try self.nonlazy_imports.putNoClobber(self.base.allocator, name, .{
             .symbol = .{
                 .n_strx = offset,
@@ -2061,49 +2055,9 @@ fn allocateTextBlock(self: *MachO, text_block: *TextBlock, new_block_size: u64, 
     return vaddr;
 }
 
-fn makeString(self: *MachO, bytes: []const u8) !u32 {
-    if (self.string_table_directory.get(bytes)) |offset| {
-        log.debug("reusing '{s}' from string table at offset 0x{x}", .{ bytes, offset });
-        return offset;
-    }
-
-    try self.string_table.ensureCapacity(self.base.allocator, self.string_table.items.len + bytes.len + 1);
-    const offset = @intCast(u32, self.string_table.items.len);
-
-    log.debug("writing new string '{s}' into string table at offset 0x{x}", .{ bytes, offset });
-
-    self.string_table.appendSliceAssumeCapacity(bytes);
-    self.string_table.appendAssumeCapacity(0);
-
-    try self.string_table_directory.putNoClobber(
-        self.base.allocator,
-        try self.base.allocator.dupe(u8, bytes),
-        offset,
-    );
-
-    self.string_table_dirty = true;
-    if (self.d_sym) |*ds|
-        ds.string_table_dirty = true;
-
-    return offset;
-}
-
-fn getString(self: *MachO, str_off: u32) []const u8 {
-    assert(str_off < self.string_table.items.len);
-    return mem.spanZ(@ptrCast([*:0]const u8, self.string_table.items.ptr + str_off));
-}
-
-fn updateString(self: *MachO, old_str_off: u32, new_name: []const u8) !u32 {
-    const existing_name = self.getString(old_str_off);
-    if (mem.eql(u8, existing_name, new_name)) {
-        return old_str_off;
-    }
-    return self.makeString(new_name);
-}
-
 pub fn addExternSymbol(self: *MachO, name: []const u8) !u32 {
     const index = @intCast(u32, self.lazy_imports.count());
-    const offset = try self.makeString(name);
+    const offset = try self.strtab.getOrPut(name);
     const sym_name = try self.base.allocator.dupe(u8, name);
     const dylib_ordinal = 1; // TODO this is now hardcoded, since we only support libSystem.
     try self.lazy_imports.putNoClobber(self.base.allocator, sym_name, .{
@@ -2293,7 +2247,7 @@ fn writeOffsetTableEntry(self: *MachO, index: usize) !void {
             },
         }
     };
-    const sym_name = self.getString(sym.n_strx);
+    const sym_name = self.strtab.get(sym.n_strx) orelse unreachable;
     log.debug("writing offset table entry [ 0x{x} => 0x{x} ({s}) ]", .{ off, sym.n_value, sym_name });
     try self.base.file.?.pwriteAll(mem.asBytes(&sym.n_value), off);
 }
@@ -2592,7 +2546,7 @@ fn relocateSymbolTable(self: *MachO) !void {
             const amt = try self.base.file.?.copyRangeAll(symtab.symoff, self.base.file.?, new_symoff, existing_size);
             if (amt != existing_size) return error.InputOutput;
             symtab.symoff = @intCast(u32, new_symoff);
-            self.string_table_needs_relocation = true;
+            self.strtab_needs_relocation = true;
         }
         symtab.nsyms = @intCast(u32, nsyms);
         self.load_commands_dirty = true;
@@ -2791,7 +2745,7 @@ fn writeExportTrie(self: *MachO) !void {
     const text_segment = self.load_commands.items[self.text_segment_cmd_index.?].Segment;
     for (self.globals.items) |symbol| {
         // TODO figure out if we should put all global symbols into the export trie
-        const name = self.getString(symbol.n_strx);
+        const name = self.strtab.get(symbol.n_strx) orelse unreachable;
         assert(symbol.n_value >= text_segment.inner.vmaddr);
         try trie.put(.{
             .name = name,
@@ -3065,26 +3019,26 @@ fn populateLazyBindOffsetsInStubHelper(self: *MachO, buffer: []const u8) !void {
 }
 
 fn writeStringTable(self: *MachO) !void {
-    if (!self.string_table_dirty) return;
+    if (!self.strtab_dirty) return;
 
     const tracy = trace(@src());
     defer tracy.end();
 
     const symtab = &self.load_commands.items[self.symtab_cmd_index.?].Symtab;
     const allocated_size = self.allocatedSizeLinkedit(symtab.stroff);
-    const needed_size = mem.alignForwardGeneric(u64, self.string_table.items.len, @alignOf(u64));
+    const needed_size = mem.alignForwardGeneric(u64, self.strtab.size(), @alignOf(u64));
 
-    if (needed_size > allocated_size or self.string_table_needs_relocation) {
+    if (needed_size > allocated_size or self.strtab_needs_relocation) {
         symtab.strsize = 0;
         symtab.stroff = @intCast(u32, self.findFreeSpaceLinkedit(needed_size, 1, symtab.symoff));
-        self.string_table_needs_relocation = false;
+        self.strtab_needs_relocation = false;
     }
     symtab.strsize = @intCast(u32, needed_size);
     log.debug("writing string table from 0x{x} to 0x{x}", .{ symtab.stroff, symtab.stroff + symtab.strsize });
 
-    try self.base.file.?.pwriteAll(self.string_table.items, symtab.stroff);
+    try self.base.file.?.pwriteAll(self.strtab.asSlice(), symtab.stroff);
     self.load_commands_dirty = true;
-    self.string_table_dirty = false;
+    self.strtab_dirty = false;
 }
 
 fn updateLinkeditSegmentSizes(self: *MachO) !void {

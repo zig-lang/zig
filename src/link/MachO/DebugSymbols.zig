@@ -76,7 +76,7 @@ dbg_info_decl_last: ?*TextBlock = null,
 debug_string_table: std.ArrayListUnmanaged(u8) = .{},
 
 load_commands_dirty: bool = false,
-string_table_dirty: bool = false,
+strtab_dirty: bool = false,
 debug_string_table_dirty: bool = false,
 debug_abbrev_section_dirty: bool = false,
 debug_aranges_section_dirty: bool = false,
@@ -131,7 +131,7 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
             },
         });
         self.load_commands_dirty = true;
-        self.string_table_dirty = true;
+        self.strtab_dirty = true;
     }
     if (self.pagezero_segment_cmd_index == null) {
         self.pagezero_segment_cmd_index = @intCast(u16, self.load_commands.items.len);
@@ -593,7 +593,7 @@ pub fn flushModule(self: *DebugSymbols, allocator: *Allocator, options: link.Opt
     try self.writeHeader();
 
     assert(!self.load_commands_dirty);
-    assert(!self.string_table_dirty);
+    assert(!self.strtab_dirty);
     assert(!self.debug_abbrev_section_dirty);
     assert(!self.debug_aranges_section_dirty);
     assert(!self.debug_string_table_dirty);
@@ -807,14 +807,14 @@ pub fn writeLocalSymbol(self: *DebugSymbols, index: usize) !void {
 }
 
 fn writeStringTable(self: *DebugSymbols) !void {
-    if (!self.string_table_dirty) return;
+    if (!self.strtab_dirty) return;
 
     const tracy = trace(@src());
     defer tracy.end();
 
     const symtab = &self.load_commands.items[self.symtab_cmd_index.?].Symtab;
     const allocated_size = self.allocatedSizeLinkedit(symtab.stroff);
-    const needed_size = mem.alignForwardGeneric(u64, self.base.string_table.items.len, @alignOf(u64));
+    const needed_size = mem.alignForwardGeneric(u64, self.base.strtab.size(), @alignOf(u64));
 
     if (needed_size > allocated_size) {
         symtab.strsize = 0;
@@ -823,9 +823,9 @@ fn writeStringTable(self: *DebugSymbols) !void {
     symtab.strsize = @intCast(u32, needed_size);
     log.debug("writing string table from 0x{x} to 0x{x}", .{ symtab.stroff, symtab.stroff + symtab.strsize });
 
-    try self.file.pwriteAll(self.base.string_table.items, symtab.stroff);
+    try self.file.pwriteAll(self.base.strtab.asSlice(), symtab.stroff);
     self.load_commands_dirty = true;
-    self.string_table_dirty = false;
+    self.strtab_dirty = false;
 }
 
 pub fn updateDeclLineNumber(self: *DebugSymbols, module: *Module, decl: *const Module.Decl) !void {
