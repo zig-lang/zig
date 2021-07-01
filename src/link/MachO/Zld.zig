@@ -3132,54 +3132,44 @@ fn writeLoadCommands(self: *Zld) !void {
 }
 
 fn writeHeader(self: *Zld) !void {
-    var header: macho.mach_header_64 = undefined;
-    header.magic = macho.MH_MAGIC_64;
+    var header = emptyHeader(.{
+        .flags = macho.MH_NOUNDEFS | macho.MH_DYLDLINK | macho.MH_PIE | macho.MH_TWOLEVEL,
+    });
 
-    const CpuInfo = struct {
-        cpu_type: macho.cpu_type_t,
-        cpu_subtype: macho.cpu_subtype_t,
-    };
-
-    const cpu_info: CpuInfo = switch (self.target.?.cpu.arch) {
-        .aarch64 => .{
-            .cpu_type = macho.CPU_TYPE_ARM64,
-            .cpu_subtype = macho.CPU_SUBTYPE_ARM_ALL,
+    switch (self.target.?.cpu.arch) {
+        .aarch64 => {
+            header.cputype = macho.CPU_TYPE_ARM64;
+            header.cpusubtype = macho.CPU_SUBTYPE_ARM_ALL;
         },
-        .x86_64 => .{
-            .cpu_type = macho.CPU_TYPE_X86_64,
-            .cpu_subtype = macho.CPU_SUBTYPE_X86_64_ALL,
+        .x86_64 => {
+            header.cputype = macho.CPU_TYPE_X86_64;
+            header.cpusubtype = macho.CPU_SUBTYPE_X86_64_ALL;
         },
         else => return error.UnsupportedCpuArchitecture,
-    };
-    header.cputype = cpu_info.cpu_type;
-    header.cpusubtype = cpu_info.cpu_subtype;
+    }
 
     switch (self.output.?.tag) {
         .exe => {
             header.filetype = macho.MH_EXECUTE;
-            header.flags = macho.MH_NOUNDEFS | macho.MH_DYLDLINK | macho.MH_PIE | macho.MH_TWOLEVEL;
         },
         .dylib => {
             header.filetype = macho.MH_DYLIB;
-            header.flags = macho.MH_NOUNDEFS |
-                macho.MH_DYLDLINK |
-                macho.MH_PIE |
-                macho.MH_TWOLEVEL |
-                macho.MH_NO_REEXPORTED_DYLIBS;
+            header.flags |= macho.MH_NO_REEXPORTED_DYLIBS;
         },
     }
-
-    header.reserved = 0;
 
     if (self.tlv_section_index) |_|
         header.flags |= macho.MH_HAS_TLV_DESCRIPTORS;
 
     header.ncmds = @intCast(u32, self.load_commands.items.len);
     header.sizeofcmds = 0;
+
     for (self.load_commands.items) |cmd| {
         header.sizeofcmds += cmd.cmdsize();
     }
+
     log.debug("writing Mach-O header {}", .{header});
+
     try self.file.?.pwriteAll(mem.asBytes(&header), 0);
 }
 

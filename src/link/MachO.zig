@@ -41,8 +41,6 @@ d_sym: ?DebugSymbols = null,
 /// For x86_64 that's 4KB, whereas for aarch64, that's 16KB.
 page_size: u16,
 
-/// Mach-O header
-header: ?macho.mach_header_64 = null,
 /// We commit 0x1000 = 4096 bytes of space to the header and
 /// the table of load commands. This should be plenty for any
 /// potential future extensions.
@@ -128,7 +126,6 @@ offset_table: std.ArrayListUnmanaged(GOTEntry) = .{},
 error_flags: File.ErrorFlags = File.ErrorFlags{},
 
 offset_table_count_dirty: bool = false,
-header_dirty: bool = false,
 load_commands_dirty: bool = false,
 rebase_info_dirty: bool = false,
 binding_info_dirty: bool = false,
@@ -497,7 +494,6 @@ pub fn flushModule(self: *MachO, comp: *Compilation) !void {
     }
 
     assert(!self.offset_table_count_dirty);
-    assert(!self.header_dirty);
     assert(!self.load_commands_dirty);
     assert(!self.rebase_info_dirty);
     assert(!self.binding_info_dirty);
@@ -1488,54 +1484,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
         .Lib => return error.TODOImplementWritingLibFiles,
     }
 
-    if (self.header == null) {
-        var header: macho.mach_header_64 = undefined;
-        header.magic = macho.MH_MAGIC_64;
-
-        const CpuInfo = struct {
-            cpu_type: macho.cpu_type_t,
-            cpu_subtype: macho.cpu_subtype_t,
-        };
-
-        const cpu_info: CpuInfo = switch (self.base.options.target.cpu.arch) {
-            .aarch64 => .{
-                .cpu_type = macho.CPU_TYPE_ARM64,
-                .cpu_subtype = macho.CPU_SUBTYPE_ARM_ALL,
-            },
-            .x86_64 => .{
-                .cpu_type = macho.CPU_TYPE_X86_64,
-                .cpu_subtype = macho.CPU_SUBTYPE_X86_64_ALL,
-            },
-            else => return error.UnsupportedMachOArchitecture,
-        };
-        header.cputype = cpu_info.cpu_type;
-        header.cpusubtype = cpu_info.cpu_subtype;
-
-        const filetype: u32 = switch (self.base.options.output_mode) {
-            .Exe => macho.MH_EXECUTE,
-            .Obj => macho.MH_OBJECT,
-            .Lib => switch (self.base.options.link_mode) {
-                .Static => return error.TODOStaticLibMachOType,
-                .Dynamic => macho.MH_DYLIB,
-            },
-        };
-        header.filetype = filetype;
-        // These will get populated at the end of flushing the results to file.
-        header.ncmds = 0;
-        header.sizeofcmds = 0;
-
-        switch (self.base.options.output_mode) {
-            .Exe => {
-                header.flags = macho.MH_NOUNDEFS | macho.MH_DYLDLINK | macho.MH_PIE;
-            },
-            else => {
-                header.flags = 0;
-            },
-        }
-        header.reserved = 0;
-        self.header = header;
-        self.header_dirty = true;
-    }
     if (self.pagezero_segment_cmd_index == null) {
         self.pagezero_segment_cmd_index = @intCast(u16, self.load_commands.items.len);
         try self.load_commands.append(self.base.allocator, .{
@@ -1543,7 +1491,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
                 .vmsize = 0x100000000, // size always set to 4GB
             }),
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.text_segment_cmd_index == null) {
@@ -1567,7 +1514,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
                 .initprot = initprot,
             }),
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.text_section_index == null) {
@@ -1592,7 +1538,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
             .@"align" = alignment,
             .flags = flags,
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.stubs_section_index == null) {
@@ -1624,7 +1569,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
             .flags = flags,
             .reserved2 = stub_size,
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.stub_helper_section_index == null) {
@@ -1650,7 +1594,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
             .@"align" = alignment,
             .flags = flags,
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.data_const_segment_cmd_index == null) {
@@ -1674,7 +1617,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
                 .initprot = initprot,
             }),
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.got_section_index == null) {
@@ -1695,7 +1637,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
             .@"align" = 3, // 2^3 = @sizeOf(u64)
             .flags = flags,
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.data_segment_cmd_index == null) {
@@ -1719,7 +1660,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
                 .initprot = initprot,
             }),
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.la_symbol_ptr_section_index == null) {
@@ -1740,7 +1680,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
             .@"align" = 3, // 2^3 = @sizeOf(u64)
             .flags = flags,
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.data_section_index == null) {
@@ -1759,7 +1698,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
             .offset = @intCast(u32, off),
             .@"align" = 3, // 2^3 = @sizeOf(u64)
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.linkedit_segment_cmd_index == null) {
@@ -1779,7 +1717,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
                 .initprot = initprot,
             }),
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.dyld_info_cmd_index == null) {
@@ -1826,7 +1763,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
         dyld.export_off = @intCast(u32, export_off);
         dyld.export_size = expected_size;
 
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.symtab_cmd_index == null) {
@@ -1858,7 +1794,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
         symtab.stroff = @intCast(u32, strtab_off);
         symtab.strsize = @intCast(u32, strtab_size);
 
-        self.header_dirty = true;
         self.load_commands_dirty = true;
         self.string_table_dirty = true;
     }
@@ -1895,7 +1830,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
                 .nlocrel = 0,
             },
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.dylinker_cmd_index == null) {
@@ -1914,7 +1848,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
         mem.set(u8, dylinker_cmd.data, 0);
         mem.copy(u8, dylinker_cmd.data, mem.spanZ(DEFAULT_DYLD_PATH));
         try self.load_commands.append(self.base.allocator, .{ .Dylinker = dylinker_cmd });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.libsystem_cmd_index == null) {
@@ -1925,7 +1858,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
 
         try self.load_commands.append(self.base.allocator, .{ .Dylib = dylib_cmd });
 
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.main_cmd_index == null) {
@@ -1938,7 +1870,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
                 .stacksize = 0,
             },
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.version_min_cmd_index == null) {
@@ -1960,7 +1891,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
                 .sdk = version,
             },
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.source_version_cmd_index == null) {
@@ -1972,7 +1902,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
                 .version = 0x0,
             },
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.uuid_cmd_index == null) {
@@ -1984,7 +1913,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
         };
         std.crypto.random.bytes(&uuid_cmd.uuid);
         try self.load_commands.append(self.base.allocator, .{ .Uuid = uuid_cmd });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.code_signature_cmd_index == null) {
@@ -1997,7 +1925,6 @@ pub fn populateMissingMetadata(self: *MachO) !void {
                 .datasize = 0,
             },
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (!self.nonlazy_imports.contains("dyld_stub_binder")) {
@@ -3224,28 +3151,65 @@ fn writeLoadCommands(self: *MachO) !void {
     }
 
     const off = @sizeOf(macho.mach_header_64);
+
     log.debug("writing {} load commands from 0x{x} to 0x{x}", .{ self.load_commands.items.len, off, off + sizeofcmds });
+
     try self.base.file.?.pwriteAll(buffer, off);
     self.load_commands_dirty = false;
 }
 
 /// Writes Mach-O file header.
 fn writeHeader(self: *MachO) !void {
-    if (!self.header_dirty) return;
+    var header = emptyHeader(.{
+        .flags = macho.MH_NOUNDEFS | macho.MH_DYLDLINK | macho.MH_PIE | macho.MH_TWOLEVEL,
+    });
 
-    self.header.?.ncmds = @intCast(u32, self.load_commands.items.len);
-    var sizeofcmds: u32 = 0;
-    for (self.load_commands.items) |cmd| {
-        sizeofcmds += cmd.cmdsize();
+    switch (self.base.options.target.cpu.arch) {
+        .aarch64 => {
+            header.cputype = macho.CPU_TYPE_ARM64;
+            header.cpusubtype = macho.CPU_SUBTYPE_ARM_ALL;
+        },
+        .x86_64 => {
+            header.cputype = macho.CPU_TYPE_X86_64;
+            header.cpusubtype = macho.CPU_SUBTYPE_X86_64_ALL;
+        },
+        else => return error.UnsupportedCpuArchitecture,
     }
-    self.header.?.sizeofcmds = sizeofcmds;
-    log.debug("writing Mach-O header {}", .{self.header.?});
-    try self.base.file.?.pwriteAll(mem.asBytes(&self.header.?), 0);
-    self.header_dirty = false;
+
+    switch (self.base.options.output_mode) {
+        .Exe => {
+            header.filetype = macho.MH_EXECUTE;
+        },
+        .Lib => {
+            // By this point, it can only be a dylib.
+            header.filetype = macho.MH_DYLIB;
+            header.flags |= macho.MH_NO_REEXPORTED_DYLIBS;
+        },
+        else => unreachable,
+    }
+
+    if (self.hasTlvDescriptors()) {
+        header.flags |= macho.MH_HAS_TLV_DESCRIPTORS;
+    }
+
+    header.ncmds = @intCast(u32, self.load_commands.items.len);
+    header.sizeofcmds = 0;
+
+    for (self.load_commands.items) |cmd| {
+        header.sizeofcmds += cmd.cmdsize();
+    }
+
+    log.debug("writing Mach-O header {}", .{header});
+
+    try self.base.file.?.pwriteAll(mem.asBytes(&header), 0);
 }
 
 pub fn padToIdeal(actual_size: anytype) @TypeOf(actual_size) {
     // TODO https://github.com/ziglang/zig/issues/1284
     return std.math.add(@TypeOf(actual_size), actual_size, actual_size / ideal_factor) catch
         std.math.maxInt(@TypeOf(actual_size));
+}
+
+fn hasTlvDescriptors(_: *MachO) bool {
+    return false;
 }

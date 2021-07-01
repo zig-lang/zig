@@ -11,6 +11,28 @@ const Allocator = std.mem.Allocator;
 const MachO = @import("../MachO.zig");
 const padToIdeal = MachO.padToIdeal;
 
+pub const HeaderArgs = struct {
+    magic: u32 = macho.MH_MAGIC_64,
+    cputype: macho.cpu_type_t = 0,
+    cpusubtype: macho.cpu_subtype_t = 0,
+    filetype: u32 = 0,
+    flags: u32 = 0,
+    reserved: u32 = 0,
+};
+
+pub fn emptyHeader(args: HeaderArgs) macho.mach_header_64 {
+    return .{
+        .magic = args.magic,
+        .cputype = args.cputype,
+        .cpusubtype = args.cpusubtype,
+        .filetype = args.filetype,
+        .ncmds = 0,
+        .sizeofcmds = 0,
+        .flags = args.flags,
+        .reserved = args.reserved,
+    };
+}
+
 pub const LoadCommand = union(enum) {
     Segment: SegmentCommand,
     DyldInfoOnly: macho.dyld_info_command,
