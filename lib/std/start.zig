@@ -46,7 +46,9 @@ comptime {
             }
         } else if (builtin.output_mode == .Exe or @hasDecl(root, "main")) {
             if (builtin.link_libc and @hasDecl(root, "main")) {
-                if (@typeInfo(@TypeOf(root.main)).Fn.calling_convention != .C) {
+                if (native_arch.isWasm()) {
+                    @export(mainWithoutEnv, .{ .name = "main" });
+                } else if (@typeInfo(@TypeOf(root.main)).Fn.calling_convention != .C) {
                     @export(main, .{ .name = "main" });
                 }
             } else if (native_os == .windows) {
@@ -392,6 +394,11 @@ fn main(c_argc: i32, c_argv: [*][*:0]u8, c_envp: [*:null]?[*:0]u8) callconv(.C) 
     }
 
     return @call(.{ .modifier = .always_inline }, callMainWithArgs, .{ @intCast(usize, c_argc), c_argv, envp });
+}
+
+fn mainWithoutEnv(c_argc: i32, c_argv: [*][*:0]u8) callconv(.C) usize {
+    std.os.argv = c_argv[0..@intCast(usize, c_argc)];
+    return @call(.{ .modifier = .always_inline }, callMain, .{});
 }
 
 // General error message for a malformed return type

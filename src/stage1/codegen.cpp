@@ -582,7 +582,9 @@ static LLVMValueRef make_fn_llvm_value(CodeGen *g, ZigFn *fn) {
 
         bool want_ssp_attrs = g->build_mode != BuildModeFastRelease &&
                               g->build_mode != BuildModeSmallRelease &&
-                              g->link_libc;
+                              g->link_libc &&
+                              // WASI-libc does not support stack-protector yet.
+                              !target_is_wasm(g->zig_target);
         if (want_ssp_attrs) {
             addLLVMFnAttr(llvm_fn, "sspstrong");
             addLLVMFnAttrStr(llvm_fn, "stack-protector-buffer-size", "4");

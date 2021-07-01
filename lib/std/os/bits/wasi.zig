@@ -4,11 +4,13 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 // Convenience types and consts used by std.os module
+const builtin = @import("builtin");
+
 pub const STDIN_FILENO = 0;
 pub const STDOUT_FILENO = 1;
 pub const STDERR_FILENO = 2;
 
-pub const mode_t = u0;
+pub const mode_t = u32;
 
 pub const time_t = i64; // match https://github.com/CraneStation/wasi-libc
 
@@ -71,7 +73,8 @@ pub const kernel_stat = struct {
     }
 };
 
-pub const AT_REMOVEDIR: u32 = 1; // there's no AT_REMOVEDIR in WASI, but we simulate here to match other OSes
+pub const AT_REMOVEDIR: u32 = 0x4;
+pub const AT_FDCWD: fd_t = -2;
 
 // As defined in the wasi_snapshot_preview1 spec file:
 // https://github.com/WebAssembly/WASI/blob/master/phases/snapshot/witx/typenames.witx
@@ -111,6 +114,7 @@ pub const EADDRINUSE: errno_t = 3;
 pub const EADDRNOTAVAIL: errno_t = 4;
 pub const EAFNOSUPPORT: errno_t = 5;
 pub const EAGAIN: errno_t = 6;
+pub const EWOULDBLOCK = EAGAIN;
 pub const EALREADY: errno_t = 7;
 pub const EBADF: errno_t = 8;
 pub const EBADMSG: errno_t = 9;
@@ -163,6 +167,7 @@ pub const ENOTEMPTY: errno_t = 55;
 pub const ENOTRECOVERABLE: errno_t = 56;
 pub const ENOTSOCK: errno_t = 57;
 pub const ENOTSUP: errno_t = 58;
+pub const EOPNOTSUPP = ENOTSUP;
 pub const ENOTTY: errno_t = 59;
 pub const ENXIO: errno_t = 60;
 pub const EOVERFLOW: errno_t = 61;
@@ -204,7 +209,7 @@ pub const EVENTTYPE_FD_WRITE: eventtype_t = 2;
 
 pub const exitcode_t = u32;
 
-pub const fd_t = u32;
+pub const fd_t = if (builtin.link_libc) c_int else u32;
 
 pub const fdflags_t = u16;
 pub const FDFLAG_APPEND: fdflags_t = 0x0001;
@@ -271,11 +276,33 @@ pub const linkcount_t = u64;
 pub const lookupflags_t = u32;
 pub const LOOKUP_SYMLINK_FOLLOW: lookupflags_t = 0x00000001;
 
-pub const oflags_t = u16;
-pub const O_CREAT: oflags_t = 0x0001;
-pub const O_DIRECTORY: oflags_t = 0x0002;
-pub const O_EXCL: oflags_t = 0x0004;
-pub const O_TRUNC: oflags_t = 0x0008;
+pub usingnamespace if (builtin.link_libc) struct {
+    pub const O_ACCMODE = (O_EXEC | O_RDWR | O_SEARCH);
+    pub const O_APPEND = 1 << 0; // = __WASI_FDFLAGS_APPEND
+    pub const O_CLOEXEC = (0);
+    pub const O_CREAT = ((1 << 0) << 12); // = __WASI_OFLAGS_CREAT << 12
+    pub const O_DIRECTORY = ((1 << 1) << 12); // = __WASI_OFLAGS_DIRECTORY << 12
+    pub const O_DSYNC = (1 << 1); // = __WASI_FDFLAGS_DSYNC
+    pub const O_EXCL = ((1 << 2) << 12); // = __WASI_OFLAGS_EXCL << 12
+    pub const O_EXEC = (0x02000000);
+    pub const O_NOCTTY = (0);
+    pub const O_NOFOLLOW = (0x01000000);
+    pub const O_NONBLOCK = (1 << 2); // = __WASI_FDFLAGS_NONBLOCK
+    pub const O_RDONLY = (0x04000000);
+    pub const O_RDWR = (O_RDONLY | O_WRONLY);
+    pub const O_RSYNC = (1 << 3); // = __WASI_FDFLAGS_RSYNC
+    pub const O_SEARCH = (0x08000000);
+    pub const O_SYNC = (1 << 4); // = __WASI_FDFLAGS_SYNC
+    pub const O_TRUNC = ((1 << 3) << 12); // = __WASI_OFLAGS_TRUNC << 12
+    pub const O_TTY_INIT = (0);
+    pub const O_WRONLY = (0x10000000);
+} else struct {
+    pub const oflags_t = u16;
+    pub const O_CREAT: oflags_t = 0x0001;
+    pub const O_DIRECTORY: oflags_t = 0x0002;
+    pub const O_EXCL: oflags_t = 0x0004;
+    pub const O_TRUNC: oflags_t = 0x0008;
+};
 
 pub const preopentype_t = u8;
 pub const PREOPENTYPE_DIR: preopentype_t = 0;
@@ -437,3 +464,23 @@ pub const whence_t = u8;
 pub const WHENCE_SET: whence_t = 0;
 pub const WHENCE_CUR: whence_t = 1;
 pub const WHENCE_END: whence_t = 2;
+
+pub const S_IEXEC = S_IXUSR;
+pub const S_IFBLK = 0x6000;
+pub const S_IFCHR = 0x2000;
+pub const S_IFDIR = 0x4000;
+pub const S_IFIFO = 0xc000;
+pub const S_IFLNK = 0xa000;
+pub const S_IFMT = S_IFBLK | S_IFCHR | S_IFDIR | S_IFIFO | S_IFLNK | S_IFREG | S_IFSOCK;
+pub const S_IFREG = 0x8000;
+// There's no concept of UNIX domain socket but we define this value here in order to line with other OSes.
+pub const S_IFSOCK = 0x1;
+
+pub const SEEK_SET = 0x0; // = __WASI_WHENCE_SET
+pub const SEEK_CUR = 0x1; // = __WASI_WHENCE_CUR
+pub const SEEK_END = 0x2; // = __WASI_WHENCE_END
+
+pub const LOCK_SH = 0x1;
+pub const LOCK_EX = 0x2;
+pub const LOCK_NB = 0x4;
+pub const LOCK_UN = 0x8;

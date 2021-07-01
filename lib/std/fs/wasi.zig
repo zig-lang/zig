@@ -169,7 +169,7 @@ pub const PreopenList = struct {
 };
 
 test "extracting WASI preopens" {
-    if (std.builtin.os.tag != .wasi) return error.SkipZigTest;
+    if (std.builtin.os.tag != .wasi or @import("builtin").link_libc) return error.SkipZigTest;
 
     var preopens = PreopenList.init(std.testing.allocator);
     defer preopens.deinit();

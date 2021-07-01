@@ -18,7 +18,7 @@ pub const Mutex = @import("Thread/Mutex.zig");
 pub const Semaphore = @import("Thread/Semaphore.zig");
 pub const Condition = @import("Thread/Condition.zig");
 
-pub const use_pthreads = std.Target.current.os.tag != .windows and builtin.link_libc;
+pub const use_pthreads = std.Target.current.os.tag != .windows and std.Target.current.os.tag != .wasi and builtin.link_libc;
 
 const Thread = @This();
 const std = @import("std.zig");
