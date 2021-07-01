@@ -17,6 +17,7 @@ const Archive = @import("Archive.zig");
 const CodeSignature = @import("CodeSignature.zig");
 const Dylib = @import("Dylib.zig");
 const Object = @import("Object.zig");
+const StringTable = @import("StringTable.zig");
 const Symbol = @import("Symbol.zig");
 const Trie = @import("Trie.zig");
 
@@ -24,6 +25,7 @@ usingnamespace @import("commands.zig");
 usingnamespace @import("bind.zig");
 
 allocator: *Allocator,
+strtab: StringTable,
 
 target: ?std.Target = null,
 page_size: ?u16 = null,
@@ -109,9 +111,6 @@ tentatives: std.StringArrayHashMapUnmanaged(*Symbol) = .{},
 /// Set if the linker found tentative definitions in any of the objects.
 tentative_defs_offset: u64 = 0,
 
-strtab: std.ArrayListUnmanaged(u8) = .{},
-strtab_dir: std.StringHashMapUnmanaged(u32) = .{},
-
 threadlocal_offsets: std.ArrayListUnmanaged(TlvOffset) = .{}, // TODO merge with Symbol abstraction
 local_rebases: std.ArrayListUnmanaged(Pointer) = .{},
 stubs: std.ArrayListUnmanaged(*Symbol) = .{},
@@ -138,8 +137,11 @@ const TlvOffset = struct {
 /// Default path to dyld
 const DEFAULT_DYLD_PATH: [*:0]const u8 = "/usr/lib/dyld";
 
-pub fn init(allocator: *Allocator) Zld {
-    return .{ .allocator = allocator };
+pub fn init(allocator: *Allocator) !Zld {
+    return Zld{
+        .allocator = allocator,
+        .strtab = try StringTable.init(allocator),
+    };
 }
 
 pub fn deinit(self: *Zld) void {
@@ -180,15 +182,7 @@ pub fn deinit(self: *Zld) void {
     self.tentatives.deinit(self.allocator);
     self.globals.deinit(self.allocator);
     self.unresolved.deinit(self.allocator);
-    self.strtab.deinit(self.allocator);
-
-    {
-        var it = self.strtab_dir.keyIterator();
-        while (it.next()) |key| {
-            self.allocator.free(key.*);
-        }
-    }
-    self.strtab_dir.deinit(self.allocator);
+    self.strtab.deinit();
 }
 
 pub fn closeFiles(self: Zld) void {
@@ -1137,16 +1131,7 @@ fn allocateTentativeSymbols(self: *Zld) !void {
     // Convert tentative definitions into regular symbols.
     for (self.tentatives.values()) |sym| {
         const tent = sym.cast(Symbol.Tentative) orelse unreachable;
-        const reg = try self.allocator.create(Symbol.Regular);
-        errdefer self.allocator.destroy(reg);
-
-        reg.* = .{
-            .base = .{
-                .@"type" = .regular,
-                .name = try self.allocator.dupe(u8, tent.base.name),
-                .got_index = tent.base.got_index,
-                .stubs_index = tent.base.stubs_index,
-            },
+        const reg = try Symbol.Regular.new(self.allocator, tent.base.name, .{
             .linkage = .global,
             .address = base_address,
             .section = section,
@@ -1156,16 +1141,18 @@ fn allocateTentativeSymbols(self: *Zld) !void {
                 .kind = .global,
                 .size = 0,
             },
-        };
+        });
+        reg.got_index = tent.base.got_index;
+        reg.stubs_index = tent.base.stubs_index;
 
-        try self.globals.putNoClobber(self.allocator, reg.base.name, &reg.base);
-        tent.base.alias = &reg.base;
+        try self.globals.putNoClobber(self.allocator, reg.name, reg);
+        tent.base.alias = reg;
 
         if (tent.base.got_index) |idx| {
-            self.got_entries.items[idx] = &reg.base;
+            self.got_entries.items[idx] = reg;
         }
         if (tent.base.stubs_index) |idx| {
-            self.stubs.items[idx] = &reg.base;
+            self.stubs.items[idx] = reg;
         }
 
         const address = mem.alignForwardGeneric(u64, base_address + tent.size, alignment);
@@ -1615,15 +1602,8 @@ fn resolveSymbols(self: *Zld) !void {
     {
         const name = try self.allocator.dupe(u8, "dyld_stub_binder");
         errdefer self.allocator.free(name);
-        const undef = try self.allocator.create(Symbol.Unresolved);
-        errdefer self.allocator.destroy(undef);
-        undef.* = .{
-            .base = .{
-                .@"type" = .unresolved,
-                .name = name,
-            },
-        };
-        try unresolved.append(&undef.base);
+        const undef = try Symbol.Unresolved.new(self.allocator, name, .{});
+        try unresolved.append(undef);
     }
 
     var referenced = std.AutoHashMap(*Dylib, void).init(self.allocator);
@@ -1641,16 +1621,7 @@ fn resolveSymbols(self: *Zld) !void {
                     // TODO this is just a temp patch until I work out what to actually
                     // do with ___dso_handle and __mh_execute_header symbols which are
                     // synthetically created by the linker on macOS.
-                    const name = try self.allocator.dupe(u8, undef.name);
-                    const proxy = try self.allocator.create(Symbol.Proxy);
-                    errdefer self.allocator.destroy(proxy);
-                    proxy.* = .{
-                        .base = .{
-                            .@"type" = .proxy,
-                            .name = name,
-                        },
-                    };
-                    break :inner &proxy.base;
+                    break :inner try Symbol.Proxy.new(self.allocator, undef.name, .{});
                 }
 
                 self.unresolved.putAssumeCapacityNoClobber(undef.name, undef);
@@ -2126,7 +2097,6 @@ fn populateMetadata(self: *Zld) !void {
                 .strsize = 0,
             },
         });
-        try self.strtab.append(self.allocator, 0);
     }
 
     if (self.dysymtab_cmd_index == null) {
@@ -2752,7 +2722,7 @@ fn writeDebugInfo(self: *Zld) !void {
         const dirname = std.fs.path.dirname(tu_path) orelse "./";
         // Current dir
         try stabs.append(.{
-            .n_strx = try self.makeString(tu_path[0 .. dirname.len + 1]),
+            .n_strx = try self.strtab.getOrPut(tu_path[0 .. dirname.len + 1]),
             .n_type = macho.N_SO,
             .n_sect = 0,
             .n_desc = 0,
@@ -2760,7 +2730,7 @@ fn writeDebugInfo(self: *Zld) !void {
         });
         // Artifact name
         try stabs.append(.{
-            .n_strx = try self.makeString(tu_path[dirname.len + 1 ..]),
+            .n_strx = try self.strtab.getOrPut(tu_path[dirname.len + 1 ..]),
             .n_type = macho.N_SO,
             .n_sect = 0,
             .n_desc = 0,
@@ -2768,7 +2738,7 @@ fn writeDebugInfo(self: *Zld) !void {
         });
         // Path to object file with debug info
         try stabs.append(.{
-            .n_strx = try self.makeString(object.name.?),
+            .n_strx = try self.strtab.getOrPut(object.name.?),
             .n_type = macho.N_OSO,
             .n_sect = 0,
             .n_desc = 1,
@@ -2801,7 +2771,7 @@ fn writeDebugInfo(self: *Zld) !void {
                         .n_value = reg.address,
                     });
                     try stabs.append(.{
-                        .n_strx = try self.makeString(sym.name),
+                        .n_strx = try self.strtab.getOrPut(sym.name),
                         .n_type = macho.N_FUN,
                         .n_sect = reg.section,
                         .n_desc = 0,
@@ -2824,7 +2794,7 @@ fn writeDebugInfo(self: *Zld) !void {
                 },
                 .global => {
                     try stabs.append(.{
-                        .n_strx = try self.makeString(sym.name),
+                        .n_strx = try self.strtab.getOrPut(sym.name),
                         .n_type = macho.N_GSYM,
                         .n_sect = 0,
                         .n_desc = 0,
@@ -2833,7 +2803,7 @@ fn writeDebugInfo(self: *Zld) !void {
                 },
                 .static => {
                     try stabs.append(.{
-                        .n_strx = try self.makeString(sym.name),
+                        .n_strx = try self.strtab.getOrPut(sym.name),
                         .n_type = macho.N_STSYM,
                         .n_sect = reg.section,
                         .n_desc = 0,
@@ -2892,24 +2862,14 @@ fn writeSymbolTable(self: *Zld) !void {
             if (reg.isTemp()) continue;
             if (reg.visited) continue;
 
+            const nlist = try reg.asNlist(&self.strtab);
+
             switch (reg.linkage) {
                 .translation_unit => {
-                    try locals.append(.{
-                        .n_strx = try self.makeString(sym.name),
-                        .n_type = macho.N_SECT,
-                        .n_sect = reg.section,
-                        .n_desc = 0,
-                        .n_value = reg.address,
-                    });
+                    try locals.append(nlist);
                 },
                 else => {
-                    try exports.append(.{
-                        .n_strx = try self.makeString(sym.name),
-                        .n_type = macho.N_SECT | macho.N_EXT,
-                        .n_sect = reg.section,
-                        .n_desc = 0,
-                        .n_value = reg.address,
-                    });
+                    try exports.append(nlist);
                 },
             }
 
@@ -2922,13 +2882,8 @@ fn writeSymbolTable(self: *Zld) !void {
 
     for (self.imports.values()) |sym| {
         const proxy = sym.cast(Symbol.Proxy) orelse unreachable;
-        try undefs.append(.{
-            .n_strx = try self.makeString(sym.name),
-            .n_type = macho.N_UNDF | macho.N_EXT,
-            .n_sect = 0,
-            .n_desc = (proxy.dylibOrdinal() * macho.N_SYMBOL_RESOLVER) | macho.REFERENCE_FLAG_UNDEFINED_NON_LAZY,
-            .n_value = 0,
-        });
+        const nlist = try proxy.asNlist(&self.strtab);
+        try undefs.append(nlist);
     }
 
     const nlocals = locals.items.len;
@@ -3017,14 +2972,14 @@ fn writeStringTable(self: *Zld) !void {
     const seg = &self.load_commands.items[self.linkedit_segment_cmd_index.?].Segment;
     const symtab = &self.load_commands.items[self.symtab_cmd_index.?].Symtab;
     symtab.stroff = @intCast(u32, seg.inner.fileoff + seg.inner.filesize);
-    symtab.strsize = @intCast(u32, mem.alignForwardGeneric(u64, self.strtab.items.len, @alignOf(u64)));
+    symtab.strsize = @intCast(u32, mem.alignForwardGeneric(u64, self.strtab.size(), @alignOf(u64)));
     seg.inner.filesize += symtab.strsize;
 
     log.debug("writing string table from 0x{x} to 0x{x}", .{ symtab.stroff, symtab.stroff + symtab.strsize });
 
-    try self.file.?.pwriteAll(self.strtab.items, symtab.stroff);
+    try self.file.?.pwriteAll(self.strtab.asSlice(), symtab.stroff);
 
-    if (symtab.strsize > self.strtab.items.len and self.target.?.cpu.arch == .x86_64) {
+    if (symtab.strsize > self.strtab.size() and self.target.?.cpu.arch == .x86_64) {
         // This is the last section, so we need to pad it out.
         try self.file.?.pwriteAll(&[_]u8{0}, seg.inner.fileoff + seg.inner.filesize - 1);
     }
@@ -3171,26 +3126,6 @@ fn writeHeader(self: *Zld) !void {
     log.debug("writing Mach-O header {}", .{header});
 
     try self.file.?.pwriteAll(mem.asBytes(&header), 0);
-}
-
-fn makeString(self: *Zld, bytes: []const u8) !u32 {
-    if (self.strtab_dir.get(bytes)) |offset| {
-        log.debug("reusing '{s}' from string table at offset 0x{x}", .{ bytes, offset });
-        return offset;
-    }
-
-    try self.strtab.ensureCapacity(self.allocator, self.strtab.items.len + bytes.len + 1);
-    const offset = @intCast(u32, self.strtab.items.len);
-    log.debug("writing new string '{s}' into string table at offset 0x{x}", .{ bytes, offset });
-    self.strtab.appendSliceAssumeCapacity(bytes);
-    self.strtab.appendAssumeCapacity(0);
-    try self.strtab_dir.putNoClobber(self.allocator, try self.allocator.dupe(u8, bytes), offset);
-    return offset;
-}
-
-fn getString(self: *const Zld, str_off: u32) []const u8 {
-    assert(str_off < self.strtab.items.len);
-    return mem.spanZ(@ptrCast([*:0]const u8, self.strtab.items.ptr + str_off));
 }
 
 pub fn parseName(name: *const [16]u8) []const u8 {

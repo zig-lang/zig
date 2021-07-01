@@ -7,6 +7,7 @@ const mem = std.mem;
 const Allocator = mem.Allocator;
 const Dylib = @import("Dylib.zig");
 const Object = @import("Object.zig");
+const StringTable = @import("StringTable.zig");
 
 pub const Type = enum {
     regular,
@@ -19,7 +20,7 @@ pub const Type = enum {
 @"type": Type,
 
 /// Symbol name. Owned slice.
-name: []u8,
+name: []const u8,
 
 /// Alias of.
 alias: ?*Symbol = null,
@@ -43,23 +44,14 @@ pub const Regular = struct {
     section: u8,
 
     /// Whether the symbol is a weak ref.
-    weak_ref: bool,
+    weak_ref: bool = false,
 
     /// Object file where to locate this symbol.
-    file: *Object,
+    /// null means self-reference.
+    file: ?*Object = null,
 
     /// Debug stab if defined.
-    stab: ?struct {
-        /// Stab kind
-        kind: enum {
-            function,
-            global,
-            static,
-        },
-
-        /// Size of the stab.
-        size: u64,
-    } = null,
+    stab: ?Stab = null,
 
     /// True if symbol was already committed into the final
     /// symbol table.
@@ -72,6 +64,68 @@ pub const Regular = struct {
         linkage_unit,
         global,
     };
+
+    pub const Stab = struct {
+        /// Stab kind
+        kind: enum {
+            function,
+            global,
+            static,
+        },
+
+        /// Size of the stab.
+        size: u64,
+    };
+
+    const Opts = struct {
+        linkage: Linkage = .translation_unit,
+        address: u64 = 0,
+        section: u8 = 0,
+        weak_ref: bool = false,
+        file: ?*Object = null,
+        stab: ?Stab = null,
+    };
+
+    pub fn new(allocator: *Allocator, name: []const u8, opts: Opts) !*Symbol {
+        const reg = try allocator.create(Regular);
+        errdefer allocator.destroy(reg);
+
+        reg.* = .{
+            .base = .{
+                .@"type" = .regular,
+                .name = try allocator.dupe(u8, name),
+            },
+            .linkage = opts.linkage,
+            .address = opts.address,
+            .section = opts.section,
+            .weak_ref = opts.weak_ref,
+            .file = opts.file,
+            .stab = opts.stab,
+        };
+
+        return &reg.base;
+    }
+
+    pub fn asNlist(regular: *Regular, strtab: *StringTable) !macho.nlist_64 {
+        const n_strx = try strtab.getOrPut(regular.base.name);
+        var nlist = macho.nlist_64{
+            .n_strx = n_strx,
+            .n_type = macho.N_SECT,
+            .n_sect = regular.section,
+            .n_desc = 0,
+            .n_value = regular.address,
+        };
+
+        if (regular.linkage != .translation_unit) {
+            nlist.n_type |= macho.N_EXT;
+        }
+        if (regular.linkage == .linkage_unit) {
+            nlist.n_type |= macho.N_PEXT;
+            nlist.n_desc |= macho.N_WEAK_DEF;
+        }
+
+        return nlist;
+    }
 
     pub fn isTemp(regular: *Regular) bool {
         if (regular.linkage == .translation_unit) {
@@ -97,6 +151,36 @@ pub const Proxy = struct {
 
     pub const base_type: Symbol.Type = .proxy;
 
+    const Opts = struct {
+        file: ?*Dylib = null,
+    };
+
+    pub fn new(allocator: *Allocator, name: []const u8, opts: Opts) !*Symbol {
+        const proxy = try allocator.create(Proxy);
+        errdefer allocator.destroy(proxy);
+
+        proxy.* = .{
+            .base = .{
+                .@"type" = .proxy,
+                .name = try allocator.dupe(u8, name),
+            },
+            .file = opts.file,
+        };
+
+        return &proxy.base;
+    }
+
+    pub fn asNlist(proxy: *Proxy, strtab: *StringTable) !macho.nlist_64 {
+        const n_strx = try strtab.getOrPut(proxy.base.name);
+        return macho.nlist_64{
+            .n_strx = n_strx,
+            .n_type = macho.N_UNDF | macho.N_EXT,
+            .n_sect = 0,
+            .n_desc = (proxy.dylibOrdinal() * macho.N_SYMBOL_RESOLVER) | macho.REFERENCE_FLAG_UNDEFINED_NON_LAZY,
+            .n_value = 0,
+        };
+    }
+
     pub fn deinit(proxy: *Proxy, allocator: *Allocator) void {
         proxy.bind_info.deinit(allocator);
     }
@@ -115,6 +199,36 @@ pub const Unresolved = struct {
     file: ?*Object = null,
 
     pub const base_type: Symbol.Type = .unresolved;
+
+    const Opts = struct {
+        file: ?*Object = null,
+    };
+
+    pub fn new(allocator: *Allocator, name: []const u8, opts: Opts) !*Symbol {
+        const undef = try allocator.create(Unresolved);
+        errdefer allocator.destroy(undef);
+
+        undef.* = .{
+            .base = .{
+                .@"type" = .unresolved,
+                .name = try allocator.dupe(u8, name),
+            },
+            .file = opts.file,
+        };
+
+        return &undef.base;
+    }
+
+    pub fn asNlist(undef: *Unresolved, strtab: *StringTable) !macho.nlist_64 {
+        const n_strx = try strtab.getOrPut(undef.base.name);
+        return macho.nlist_64{
+            .n_strx = n_strx,
+            .n_type = macho.N_UNDF,
+            .n_sect = 0,
+            .n_desc = 0,
+            .n_value = 0,
+        };
+    }
 };
 
 pub const Tentative = struct {
@@ -127,13 +241,49 @@ pub const Tentative = struct {
     alignment: u16,
 
     /// File where this symbol was referenced.
-    file: *Object,
+    file: ?*Object = null,
 
     pub const base_type: Symbol.Type = .tentative;
+
+    const Opts = struct {
+        size: u64 = 0,
+        alignment: u16 = 0,
+        file: ?*Object = null,
+    };
+
+    pub fn new(allocator: *Allocator, name: []const u8, opts: Opts) !*Symbol {
+        const tent = try allocator.create(Tentative);
+        errdefer allocator.destroy(tent);
+
+        tent.* = .{
+            .base = .{
+                .@"type" = .tentative,
+                .name = try allocator.dupe(u8, name),
+            },
+            .size = opts.size,
+            .alignment = opts.alignment,
+            .file = opts.file,
+        };
+
+        return &tent.base;
+    }
+
+    pub fn asNlist(tent: *Tentative, strtab: *StringTable) !macho.nlist_64 {
+        // TODO
+        const n_strx = try strtab.getOrPut(tent.base.name);
+        return macho.nlist_64{
+            .n_strx = n_strx,
+            .n_type = macho.N_UNDF,
+            .n_sect = 0,
+            .n_desc = 0,
+            .n_value = 0,
+        };
+    }
 };
 
 pub fn deinit(base: *Symbol, allocator: *Allocator) void {
     allocator.free(base.name);
+
     switch (base.@"type") {
         .proxy => @fieldParentPtr(Proxy, "base", base).deinit(allocator),
         else => {},
@@ -152,6 +302,15 @@ pub fn getTopmostAlias(base: *Symbol) *Symbol {
         return alias.getTopmostAlias();
     }
     return base;
+}
+
+pub fn asNlist(base: *Symbol, strtab: *StringTable) !macho.nlist_64 {
+    return switch (base.tag) {
+        .regular => @fieldParentPtr(Regular, "base", base).asNlist(strtab),
+        .proxy => @fieldParentPtr(Proxy, "base", base).asNlist(strtab),
+        .unresolved => @fieldParentPtr(Unresolved, "base", base).asNlist(strtab),
+        .tentative => @fieldParentPtr(Tentative, "base", base).asNlist(strtab),
+    };
 }
 
 pub fn isStab(sym: macho.nlist_64) bool {

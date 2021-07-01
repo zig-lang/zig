@@ -9,12 +9,12 @@ const log = std.log.scoped(.object);
 const macho = std.macho;
 const mem = std.mem;
 const reloc = @import("reloc.zig");
+const parseName = @import("Zld.zig").parseName;
 
 const Allocator = mem.Allocator;
 const Arch = std.Target.Cpu.Arch;
 const Relocation = reloc.Relocation;
 const Symbol = @import("Symbol.zig");
-const parseName = @import("Zld.zig").parseName;
 
 usingnamespace @import("commands.zig");
 
@@ -437,47 +437,26 @@ pub fn parseSymbols(self: *Object) !void {
                     if (Symbol.isWeakDef(sym) or Symbol.isPext(sym)) break :linkage .linkage_unit;
                     break :linkage .global;
                 };
-                const regular = try self.allocator.create(Symbol.Regular);
-                errdefer self.allocator.destroy(regular);
-                regular.* = .{
-                    .base = .{
-                        .@"type" = .regular,
-                        .name = name,
-                    },
+                break :symbol try Symbol.Regular.new(self.allocator, name, .{
                     .linkage = linkage,
                     .address = sym.n_value,
                     .section = sym.n_sect - 1,
                     .weak_ref = Symbol.isWeakRef(sym),
                     .file = self,
-                };
-                break :symbol &regular.base;
+                });
             }
 
             if (sym.n_value != 0) {
-                const tentative = try self.allocator.create(Symbol.Tentative);
-                errdefer self.allocator.destroy(tentative);
-                tentative.* = .{
-                    .base = .{
-                        .@"type" = .tentative,
-                        .name = name,
-                    },
+                break :symbol try Symbol.Tentative.new(self.allocator, name, .{
                     .size = sym.n_value,
                     .alignment = (sym.n_desc >> 8) & 0x0f,
                     .file = self,
-                };
-                break :symbol &tentative.base;
+                });
             }
 
-            const undef = try self.allocator.create(Symbol.Unresolved);
-            errdefer self.allocator.destroy(undef);
-            undef.* = .{
-                .base = .{
-                    .@"type" = .unresolved,
-                    .name = name,
-                },
+            break :symbol try Symbol.Unresolved.new(self.allocator, name, .{
                 .file = self,
-            };
-            break :symbol &undef.base;
+            });
         };
 
         try self.symbols.append(self.allocator, symbol);

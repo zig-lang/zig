@@ -146,7 +146,12 @@ pub const CreateOpts = struct {
     id: ?Id = null,
 };
 
-pub fn createAndParseFromPath(allocator: *Allocator, arch: Arch, path: []const u8, opts: CreateOpts) Error!?[]*Dylib {
+pub fn createAndParseFromPath(
+    allocator: *Allocator,
+    arch: Arch,
+    path: []const u8,
+    opts: CreateOpts,
+) Error!?[]*Dylib {
     const file = fs.cwd().openFile(path, .{}) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => |e| return e,
@@ -505,18 +510,7 @@ pub fn parseDependentLibs(self: *Dylib, out: *std.ArrayList(*Dylib)) !void {
 
 pub fn createProxy(self: *Dylib, sym_name: []const u8) !?*Symbol {
     if (!self.symbols.contains(sym_name)) return null;
-
-    const name = try self.allocator.dupe(u8, sym_name);
-    const proxy = try self.allocator.create(Symbol.Proxy);
-    errdefer self.allocator.destroy(proxy);
-
-    proxy.* = .{
-        .base = .{
-            .@"type" = .proxy,
-            .name = name,
-        },
+    return Symbol.Proxy.new(self.allocator, sym_name, .{
         .file = self,
-    };
-
-    return &proxy.base;
+    });
 }

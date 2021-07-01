@@ -724,7 +724,7 @@ fn linkWithZld(self: *MachO, comp: *Compilation) !void {
             try fs.cwd().copyFile(the_object_path, fs.cwd(), full_out_path, .{});
         }
     } else {
-        var zld = Zld.init(self.base.allocator);
+        var zld = try Zld.init(self.base.allocator);
         defer {
             zld.closeFiles();
             zld.deinit();
