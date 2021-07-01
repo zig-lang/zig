@@ -1137,10 +1137,6 @@ fn allocateTentativeSymbols(self: *Zld) !void {
             .section = section,
             .weak_ref = false,
             .file = tent.file,
-            .stab = .{
-                .kind = .global,
-                .size = 0,
-            },
         });
         reg.got_index = tent.base.got_index;
         reg.stubs_index = tent.base.stubs_index;
@@ -2338,7 +2334,6 @@ fn flush(self: *Zld) !void {
         symtab.symoff = @intCast(u32, seg.inner.fileoff + seg.inner.filesize);
     }
 
-    try self.writeDebugInfo();
     try self.writeSymbolTable();
     try self.writeStringTable();
 
@@ -2711,138 +2706,6 @@ fn writeExportInfo(self: *Zld) !void {
     try self.file.?.pwriteAll(buffer, dyld_info.export_off);
 }
 
-fn writeDebugInfo(self: *Zld) !void {
-    var stabs = std.ArrayList(macho.nlist_64).init(self.allocator);
-    defer stabs.deinit();
-
-    for (self.objects.items) |object| {
-        const tu_path = object.tu_path orelse continue;
-        const tu_mtime = object.tu_mtime orelse continue;
-        _ = tu_mtime;
-        const dirname = std.fs.path.dirname(tu_path) orelse "./";
-        // Current dir
-        try stabs.append(.{
-            .n_strx = try self.strtab.getOrPut(tu_path[0 .. dirname.len + 1]),
-            .n_type = macho.N_SO,
-            .n_sect = 0,
-            .n_desc = 0,
-            .n_value = 0,
-        });
-        // Artifact name
-        try stabs.append(.{
-            .n_strx = try self.strtab.getOrPut(tu_path[dirname.len + 1 ..]),
-            .n_type = macho.N_SO,
-            .n_sect = 0,
-            .n_desc = 0,
-            .n_value = 0,
-        });
-        // Path to object file with debug info
-        try stabs.append(.{
-            .n_strx = try self.strtab.getOrPut(object.name.?),
-            .n_type = macho.N_OSO,
-            .n_sect = 0,
-            .n_desc = 1,
-            .n_value = 0, //tu_mtime, TODO figure out why precalculated mtime value doesn't work
-        });
-
-        for (object.symbols.items) |sym| {
-            const reg = reg: {
-                switch (sym.@"type") {
-                    .regular => break :reg sym.cast(Symbol.Regular) orelse unreachable,
-                    .tentative => {
-                        const final = sym.getTopmostAlias().cast(Symbol.Regular) orelse unreachable;
-                        if (object != final.file) continue;
-                        break :reg final;
-                    },
-                    else => continue,
-                }
-            };
-
-            if (reg.isTemp() or reg.stab == null) continue;
-            const stab = reg.stab orelse unreachable;
-
-            switch (stab.kind) {
-                .function => {
-                    try stabs.append(.{
-                        .n_strx = 0,
-                        .n_type = macho.N_BNSYM,
-                        .n_sect = reg.section,
-                        .n_desc = 0,
-                        .n_value = reg.address,
-                    });
-                    try stabs.append(.{
-                        .n_strx = try self.strtab.getOrPut(sym.name),
-                        .n_type = macho.N_FUN,
-                        .n_sect = reg.section,
-                        .n_desc = 0,
-                        .n_value = reg.address,
-                    });
-                    try stabs.append(.{
-                        .n_strx = 0,
-                        .n_type = macho.N_FUN,
-                        .n_sect = 0,
-                        .n_desc = 0,
-                        .n_value = stab.size,
-                    });
-                    try stabs.append(.{
-                        .n_strx = 0,
-                        .n_type = macho.N_ENSYM,
-                        .n_sect = reg.section,
-                        .n_desc = 0,
-                        .n_value = stab.size,
-                    });
-                },
-                .global => {
-                    try stabs.append(.{
-                        .n_strx = try self.strtab.getOrPut(sym.name),
-                        .n_type = macho.N_GSYM,
-                        .n_sect = 0,
-                        .n_desc = 0,
-                        .n_value = 0,
-                    });
-                },
-                .static => {
-                    try stabs.append(.{
-                        .n_strx = try self.strtab.getOrPut(sym.name),
-                        .n_type = macho.N_STSYM,
-                        .n_sect = reg.section,
-                        .n_desc = 0,
-                        .n_value = reg.address,
-                    });
-                },
-            }
-        }
-
-        // Close the source file!
-        try stabs.append(.{
-            .n_strx = 0,
-            .n_type = macho.N_SO,
-            .n_sect = 0,
-            .n_desc = 0,
-            .n_value = 0,
-        });
-    }
-
-    if (stabs.items.len == 0) return;
-
-    // Write stabs into the symbol table
-    const linkedit = &self.load_commands.items[self.linkedit_segment_cmd_index.?].Segment;
-    const symtab = &self.load_commands.items[self.symtab_cmd_index.?].Symtab;
-
-    symtab.nsyms = @intCast(u32, stabs.items.len);
-
-    const stabs_off = symtab.symoff;
-    const stabs_size = symtab.nsyms * @sizeOf(macho.nlist_64);
-    log.debug("writing symbol stabs from 0x{x} to 0x{x}", .{ stabs_off, stabs_size + stabs_off });
-    try self.file.?.pwriteAll(mem.sliceAsBytes(stabs.items), stabs_off);
-
-    linkedit.inner.filesize += stabs_size;
-
-    // Update dynamic symbol table.
-    const dysymtab = &self.load_commands.items[self.dysymtab_cmd_index.?].Dysymtab;
-    dysymtab.nlocalsym = symtab.nsyms;
-}
-
 fn writeSymbolTable(self: *Zld) !void {
     const seg = &self.load_commands.items[self.linkedit_segment_cmd_index.?].Segment;
     const symtab = &self.load_commands.items[self.symtab_cmd_index.?].Symtab;
@@ -2854,6 +2717,15 @@ fn writeSymbolTable(self: *Zld) !void {
     defer exports.deinit();
 
     for (self.objects.items) |object| {
+        for (object.stabs.items) |sym| {
+            const stab = sym.cast(Symbol.Stab) orelse unreachable;
+
+            const nlists = try stab.asNlists(self.allocator, &self.strtab);
+            defer self.allocator.free(nlists);
+
+            try locals.appendSlice(nlists);
+        }
+
         for (object.symbols.items) |sym| {
             const final = sym.getTopmostAlias();
             if (final.@"type" != .regular) continue;

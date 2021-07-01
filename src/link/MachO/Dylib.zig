@@ -18,7 +18,6 @@ const LibStub = @import("../tapi.zig").LibStub;
 usingnamespace @import("commands.zig");
 
 allocator: *Allocator,
-
 arch: ?Arch = null,
 header: ?macho.mach_header_64 = null,
 file: ?fs.File = null,

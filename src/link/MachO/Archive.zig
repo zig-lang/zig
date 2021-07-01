@@ -81,6 +81,11 @@ const ar_hdr = extern struct {
         }
     }
 
+    fn date(self: ar_hdr) !u64 {
+        const value = getValue(&self.ar_date);
+        return std.fmt.parseInt(u64, value, 10);
+    }
+
     fn size(self: ar_hdr) !u32 {
         const value = getValue(&self.ar_size);
         return std.fmt.parseInt(u32, value, 10);
@@ -264,6 +269,7 @@ pub fn parseObject(self: Archive, offset: u32) !*Object {
         .file = try fs.cwd().openFile(self.name.?, .{}),
         .name = name,
         .file_offset = @intCast(u32, try reader.context.getPos()),
+        .mtime = try self.header.?.date(),
     };
     try object.parse();
     try reader.context.seekTo(0);

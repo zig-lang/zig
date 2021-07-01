@@ -10,6 +10,7 @@ const Object = @import("Object.zig");
 const StringTable = @import("StringTable.zig");
 
 pub const Type = enum {
+    stab,
     regular,
     proxy,
     unresolved,
@@ -31,6 +32,151 @@ got_index: ?u32 = null,
 /// Index in stubs table for late binding.
 stubs_index: ?u32 = null,
 
+pub const Stab = struct {
+    base: Symbol,
+
+    // Symbol kind: function, etc.
+    kind: Kind,
+
+    // Size of stab.
+    size: u64,
+
+    // Base regular symbol for this stub if defined.
+    symbol: ?*Symbol = null,
+
+    // null means self-reference.
+    file: ?*Object = null,
+
+    pub const base_type: Symbol.Type = .stab;
+
+    pub const Kind = enum {
+        so,
+        oso,
+        function,
+        global,
+        static,
+    };
+
+    const Opts = struct {
+        kind: Kind = .so,
+        size: u64 = 0,
+        symbol: ?*Symbol = null,
+        file: ?*Object = null,
+    };
+
+    pub fn new(allocator: *Allocator, name: []const u8, opts: Opts) !*Symbol {
+        const stab = try allocator.create(Stab);
+        errdefer allocator.destroy(stab);
+
+        stab.* = .{
+            .base = .{
+                .@"type" = .stab,
+                .name = try allocator.dupe(u8, name),
+            },
+            .kind = opts.kind,
+            .size = opts.size,
+            .symbol = opts.symbol,
+            .file = opts.file,
+        };
+
+        return &stab.base;
+    }
+
+    pub fn asNlists(stab: *Stab, allocator: *Allocator, strtab: *StringTable) ![]macho.nlist_64 {
+        var out = std.ArrayList(macho.nlist_64).init(allocator);
+        defer out.deinit();
+        if (stab.kind == .so) {
+            try out.append(.{
+                .n_strx = try strtab.getOrPut(stab.base.name),
+                .n_type = macho.N_SO,
+                .n_sect = 0,
+                .n_desc = 0,
+                .n_value = 0,
+            });
+        } else if (stab.kind == .oso) {
+            const mtime = mtime: {
+                const object = stab.file orelse break :mtime 0;
+                break :mtime object.mtime orelse 0;
+            };
+            try out.append(.{
+                .n_strx = try strtab.getOrPut(stab.base.name),
+                .n_type = macho.N_OSO,
+                .n_sect = 0,
+                .n_desc = 1,
+                .n_value = mtime,
+            });
+        } else outer: {
+            const symbol = stab.symbol orelse unreachable;
+            const regular = symbol.getTopmostAlias().cast(Regular) orelse unreachable;
+            const is_match = blk: {
+                if (regular.file == null and stab.file == null) break :blk true;
+                if (regular.file) |f1| {
+                    if (stab.file) |f2| {
+                        if (f1 == f2) break :blk true;
+                    }
+                }
+                break :blk false;
+            };
+            if (!is_match) break :outer;
+
+            switch (stab.kind) {
+                .function => {
+                    try out.ensureUnusedCapacity(4);
+                    out.appendAssumeCapacity(.{
+                        .n_strx = 0,
+                        .n_type = macho.N_BNSYM,
+                        .n_sect = regular.section,
+                        .n_desc = 0,
+                        .n_value = regular.address,
+                    });
+                    out.appendAssumeCapacity(.{
+                        .n_strx = try strtab.getOrPut(stab.base.name),
+                        .n_type = macho.N_FUN,
+                        .n_sect = regular.section,
+                        .n_desc = 0,
+                        .n_value = regular.address,
+                    });
+                    out.appendAssumeCapacity(.{
+                        .n_strx = 0,
+                        .n_type = macho.N_FUN,
+                        .n_sect = 0,
+                        .n_desc = 0,
+                        .n_value = stab.size,
+                    });
+                    out.appendAssumeCapacity(.{
+                        .n_strx = 0,
+                        .n_type = macho.N_ENSYM,
+                        .n_sect = regular.section,
+                        .n_desc = 0,
+                        .n_value = stab.size,
+                    });
+                },
+                .global => {
+                    try out.append(.{
+                        .n_strx = try strtab.getOrPut(stab.base.name),
+                        .n_type = macho.N_GSYM,
+                        .n_sect = 0,
+                        .n_desc = 0,
+                        .n_value = 0,
+                    });
+                },
+                .static => {
+                    try out.append(.{
+                        .n_strx = try strtab.getOrPut(stab.base.name),
+                        .n_type = macho.N_STSYM,
+                        .n_sect = regular.section,
+                        .n_desc = 0,
+                        .n_value = regular.address,
+                    });
+                },
+                .so, .oso => unreachable,
+            }
+        }
+
+        return out.toOwnedSlice();
+    }
+};
+
 pub const Regular = struct {
     base: Symbol,
 
@@ -50,9 +196,6 @@ pub const Regular = struct {
     /// null means self-reference.
     file: ?*Object = null,
 
-    /// Debug stab if defined.
-    stab: ?Stab = null,
-
     /// True if symbol was already committed into the final
     /// symbol table.
     visited: bool = false,
@@ -65,25 +208,12 @@ pub const Regular = struct {
         global,
     };
 
-    pub const Stab = struct {
-        /// Stab kind
-        kind: enum {
-            function,
-            global,
-            static,
-        },
-
-        /// Size of the stab.
-        size: u64,
-    };
-
     const Opts = struct {
         linkage: Linkage = .translation_unit,
         address: u64 = 0,
         section: u8 = 0,
         weak_ref: bool = false,
         file: ?*Object = null,
-        stab: ?Stab = null,
     };
 
     pub fn new(allocator: *Allocator, name: []const u8, opts: Opts) !*Symbol {
@@ -100,7 +230,6 @@ pub const Regular = struct {
             .section = opts.section,
             .weak_ref = opts.weak_ref,
             .file = opts.file,
-            .stab = opts.stab,
         };
 
         return &reg.base;
@@ -302,15 +431,6 @@ pub fn getTopmostAlias(base: *Symbol) *Symbol {
         return alias.getTopmostAlias();
     }
     return base;
-}
-
-pub fn asNlist(base: *Symbol, strtab: *StringTable) !macho.nlist_64 {
-    return switch (base.tag) {
-        .regular => @fieldParentPtr(Regular, "base", base).asNlist(strtab),
-        .proxy => @fieldParentPtr(Proxy, "base", base).asNlist(strtab),
-        .unresolved => @fieldParentPtr(Unresolved, "base", base).asNlist(strtab),
-        .tentative => @fieldParentPtr(Tentative, "base", base).asNlist(strtab),
-    };
 }
 
 pub fn isStab(sym: macho.nlist_64) bool {

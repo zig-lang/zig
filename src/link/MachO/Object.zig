@@ -24,6 +24,7 @@ header: ?macho.mach_header_64 = null,
 file: ?fs.File = null,
 file_offset: ?u32 = null,
 name: ?[]const u8 = null,
+mtime: ?u64 = null,
 
 load_commands: std.ArrayListUnmanaged(LoadCommand) = .{},
 sections: std.ArrayListUnmanaged(Section) = .{},
@@ -45,11 +46,9 @@ dwarf_debug_line_index: ?u16 = null,
 dwarf_debug_ranges_index: ?u16 = null,
 
 symbols: std.ArrayListUnmanaged(*Symbol) = .{},
+stabs: std.ArrayListUnmanaged(*Symbol) = .{},
 initializers: std.ArrayListUnmanaged(*Symbol) = .{},
 data_in_code_entries: std.ArrayListUnmanaged(macho.data_in_code_entry) = .{},
-
-tu_path: ?[]const u8 = null,
-tu_mtime: ?u64 = null,
 
 pub const Section = struct {
     inner: macho.section_64,
@@ -223,15 +222,17 @@ pub fn deinit(self: *Object) void {
     }
     self.symbols.deinit(self.allocator);
 
+    for (self.stabs.items) |stab| {
+        stab.deinit(self.allocator);
+        self.allocator.destroy(stab);
+    }
+    self.stabs.deinit(self.allocator);
+
     self.data_in_code_entries.deinit(self.allocator);
     self.initializers.deinit(self.allocator);
 
     if (self.name) |n| {
         self.allocator.free(n);
-    }
-
-    if (self.tu_path) |tu_path| {
-        self.allocator.free(tu_path);
     }
 }
 
@@ -484,11 +485,33 @@ pub fn parseDebugInfo(self: *Object) !void {
     const name = try compile_unit.die.getAttrString(&debug_info.inner, dwarf.AT_name);
     const comp_dir = try compile_unit.die.getAttrString(&debug_info.inner, dwarf.AT_comp_dir);
 
-    self.tu_path = try std.fs.path.join(self.allocator, &[_][]const u8{ comp_dir, name });
-    self.tu_mtime = mtime: {
-        const stat = try self.file.?.stat();
-        break :mtime @intCast(u64, @divFloor(stat.mtime, 1_000_000_000));
-    };
+    if (self.mtime == null) {
+        self.mtime = mtime: {
+            const file = self.file orelse break :mtime 0;
+            const stat = file.stat() catch break :mtime 0;
+            break :mtime @intCast(u64, @divFloor(stat.mtime, 1_000_000_000));
+        };
+    }
+
+    try self.stabs.ensureUnusedCapacity(self.allocator, self.symbols.items.len + 4);
+
+    // Current dir
+    self.stabs.appendAssumeCapacity(try Symbol.Stab.new(self.allocator, comp_dir, .{
+        .kind = .so,
+        .file = self,
+    }));
+
+    // Artifact name
+    self.stabs.appendAssumeCapacity(try Symbol.Stab.new(self.allocator, name, .{
+        .kind = .so,
+        .file = self,
+    }));
+
+    // Path to object file with debug info
+    self.stabs.appendAssumeCapacity(try Symbol.Stab.new(self.allocator, self.name.?, .{
+        .kind = .oso,
+        .file = self,
+    }));
 
     for (self.symbols.items) |sym| {
         if (sym.cast(Symbol.Regular)) |reg| {
@@ -500,7 +523,7 @@ pub fn parseDebugInfo(self: *Object) !void {
                 }
             } else 0;
 
-            reg.stab = .{
+            const stab = try Symbol.Stab.new(self.allocator, sym.name, .{
                 .kind = kind: {
                     if (size > 0) break :kind .function;
                     switch (reg.linkage) {
@@ -509,9 +532,27 @@ pub fn parseDebugInfo(self: *Object) !void {
                     }
                 },
                 .size = size,
-            };
+                .symbol = sym,
+                .file = self,
+            });
+            self.stabs.appendAssumeCapacity(stab);
+        } else if (sym.cast(Symbol.Tentative)) |_| {
+            const stab = try Symbol.Stab.new(self.allocator, sym.name, .{
+                .kind = .global,
+                .size = 0,
+                .symbol = sym,
+                .file = self,
+            });
+            self.stabs.appendAssumeCapacity(stab);
         }
     }
+
+    // Closing delimiter.
+    const delim_stab = try Symbol.Stab.new(self.allocator, "", .{
+        .kind = .so,
+        .file = self,
+    });
+    self.stabs.appendAssumeCapacity(delim_stab);
 }
 
 fn readSection(self: Object, allocator: *Allocator, index: u16) ![]u8 {
