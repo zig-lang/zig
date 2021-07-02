@@ -10,7 +10,6 @@ const aarch64 = @import("reloc/aarch64.zig");
 const x86_64 = @import("reloc/x86_64.zig");
 
 const Allocator = mem.Allocator;
-const Symbol = @import("Symbol.zig");
 
 pub const Relocation = struct {
     @"type": Type,
@@ -81,12 +80,12 @@ pub const Relocation = struct {
     };
 
     pub const Target = union(enum) {
-        symbol: *Symbol,
+        symbol: u32,
         section: u16,
 
-        pub fn from_reloc(reloc: macho.relocation_info, symbols: []*Symbol) Target {
+        pub fn fromReloc(reloc: macho.relocation_info) Target {
             return if (reloc.r_extern == 1) .{
-                .symbol = symbols[reloc.r_symbolnum],
+                .symbol = reloc.r_symbolnum,
             } else .{
                 .section = @intCast(u16, reloc.r_symbolnum - 1),
             };
@@ -142,7 +141,6 @@ pub fn parse(
     arch: std.Target.Cpu.Arch,
     code: []u8,
     relocs: []const macho.relocation_info,
-    symbols: []*Symbol,
 ) ![]*Relocation {
     var it = RelocIterator{
         .buffer = relocs,
@@ -155,7 +153,6 @@ pub fn parse(
                 .it = &it,
                 .code = code,
                 .parsed = std.ArrayList(*Relocation).init(allocator),
-                .symbols = symbols,
             };
             defer parser.deinit();
             try parser.parse();
@@ -168,7 +165,6 @@ pub fn parse(
                 .it = &it,
                 .code = code,
                 .parsed = std.ArrayList(*Relocation).init(allocator),
-                .symbols = symbols,
             };
             defer parser.deinit();
             try parser.parse();

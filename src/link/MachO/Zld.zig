@@ -1172,7 +1172,7 @@ fn allocateProxyBindAddresses(self: *Zld) !void {
                 if (rel.@"type" != .unsigned) continue; // GOT is currently special-cased
                 if (rel.target != .symbol) continue;
 
-                const sym = rel.target.symbol.getTopmostAlias();
+                const sym = object.symbols.items[rel.target.symbol].getTopmostAlias();
                 if (sym.cast(Symbol.Proxy)) |proxy| {
                     const target_map = sect.target_map orelse continue;
                     const target_seg = self.load_commands.items[target_map.segment_id].Segment;
@@ -1670,7 +1670,7 @@ fn resolveStubsAndGotEntries(self: *Zld) !void {
                 switch (rel.@"type") {
                     .unsigned => continue,
                     .got_page, .got_page_off, .got_load, .got, .pointer_to_got => {
-                        const sym = rel.target.symbol.getTopmostAlias();
+                        const sym = object.symbols.items[rel.target.symbol].getTopmostAlias();
                         if (sym.got_index != null) continue;
 
                         const index = @intCast(u32, self.got_entries.items.len);
@@ -1682,7 +1682,7 @@ fn resolveStubsAndGotEntries(self: *Zld) !void {
                     else => {
                         if (rel.target != .symbol) continue;
 
-                        const sym = rel.target.symbol.getTopmostAlias();
+                        const sym = object.symbols.items[rel.target.symbol].getTopmostAlias();
                         assert(sym.@"type" != .unresolved);
 
                         if (sym.stubs_index != null) continue;
@@ -1781,7 +1781,7 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
                                     break :rebase false;
                                 }
                                 if (rel.target == .symbol) {
-                                    const final = rel.target.symbol.getTopmostAlias();
+                                    const final = object.symbols.items[rel.target.symbol].getTopmostAlias();
                                     if (final.cast(Symbol.Proxy)) |_| {
                                         break :rebase false;
                                     }
@@ -1801,7 +1801,7 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
                             // Calculate the offset to the initializer.
                             if (flags == macho.S_THREAD_LOCAL_VARIABLES) tlv: {
                                 // TODO we don't want to save offset to tlv_bootstrap
-                                if (mem.eql(u8, rel.target.symbol.name, "__tlv_bootstrap")) break :tlv;
+                                if (mem.eql(u8, object.symbols.items[rel.target.symbol].name, "__tlv_bootstrap")) break :tlv;
 
                                 const base_addr = blk: {
                                     if (self.tlv_data_section_index) |index| {
@@ -1823,7 +1823,8 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
                         .got_page, .got_page_off, .got_load, .got, .pointer_to_got => {
                             const dc_seg = self.load_commands.items[self.data_const_segment_cmd_index.?].Segment;
                             const got = dc_seg.sections.items[self.got_section_index.?];
-                            const final = rel.target.symbol.getTopmostAlias();
+                            const sym = object.symbols.items[rel.target.symbol];
+                            const final = sym.getTopmostAlias();
                             const got_index = final.got_index orelse {
                                 log.err("expected GOT index relocating symbol '{s}'", .{final.name});
                                 log.err("this is an internal linker error", .{});
@@ -1879,7 +1880,8 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
 fn relocTargetAddr(self: *Zld, object: *const Object, target: reloc.Relocation.Target) !u64 {
     const target_addr = blk: {
         switch (target) {
-            .symbol => |sym| {
+            .symbol => |sym_id| {
+                const sym = object.symbols.items[sym_id];
                 const final = sym.getTopmostAlias();
                 if (final.cast(Symbol.Regular)) |reg| {
                     log.debug("    | regular '{s}'", .{sym.name});

@@ -377,7 +377,6 @@ pub fn parseSections(self: *Object) !void {
                 self.arch.?,
                 section.code,
                 mem.bytesAsSlice(macho.relocation_info, raw_relocs),
-                self.symbols.items,
             );
         }
 
@@ -395,7 +394,8 @@ pub fn parseInitializers(self: *Object) !void {
     const relocs = section.relocs orelse unreachable;
     try self.initializers.ensureCapacity(self.allocator, relocs.len);
     for (relocs) |rel| {
-        self.initializers.appendAssumeCapacity(rel.target.symbol);
+        const sym = self.symbols.items[rel.target.symbol];
+        self.initializers.appendAssumeCapacity(sym);
     }
 
     mem.reverse(*Symbol, self.initializers.items);
