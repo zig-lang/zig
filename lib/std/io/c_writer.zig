@@ -35,7 +35,7 @@ fn cWriterWrite(c_file: *std.c.FILE, bytes: []const u8) std.fs.File.WriteError!u
 }
 
 test {
-    if (!builtin.link_libc) return error.SkipZigTest;
+    if (!builtin.link_libc or builtin.os.tag == .wasi) return error.SkipZigTest;
 
     const filename = "tmp_io_test_file.txt";
     const out_file = std.c.fopen(filename, "w") orelse return error.UnableToOpenTestFile;

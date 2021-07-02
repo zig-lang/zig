@@ -405,7 +405,7 @@ pub fn readv(fd: fd_t, iov: []const iovec) ReadError!usize {
         const first = iov[0];
         return read(fd, first.iov_base[0..first.iov_len]);
     }
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         var nread: usize = undefined;
         switch (wasi.fd_read(fd, iov.ptr, iov.len, &nread)) {
             wasi.ESUCCESS => return nread,
@@ -462,7 +462,7 @@ pub fn pread(fd: fd_t, buf: []u8, offset: u64) PReadError!usize {
     if (builtin.os.tag == .windows) {
         return windows.ReadFile(fd, buf, offset, std.io.default_mode);
     }
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         const iovs = [1]iovec{iovec{
             .iov_base = buf.ptr,
             .iov_len = buf.len,
@@ -557,7 +557,7 @@ pub fn ftruncate(fd: fd_t, length: u64) TruncateError!void {
             else => return windows.unexpectedStatus(rc),
         }
     }
-    if (std.Target.current.os.tag == .wasi) {
+    if (std.Target.current.os.tag == .wasi and !builtin.link_libc) {
         switch (wasi.fd_filestat_set_size(fd, length)) {
             wasi.ESUCCESS => return,
             wasi.EINTR => unreachable,
@@ -618,7 +618,7 @@ pub fn preadv(fd: fd_t, iov: []const iovec, offset: u64) PReadError!usize {
         const first = iov[0];
         return pread(fd, first.iov_base[0..first.iov_len], offset);
     }
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         var nread: usize = undefined;
         switch (wasi.fd_pread(fd, iov.ptr, iov.len, offset, &nread)) {
             wasi.ESUCCESS => return nread,
@@ -796,7 +796,7 @@ pub fn writev(fd: fd_t, iov: []const iovec_const) WriteError!usize {
         const first = iov[0];
         return write(fd, first.iov_base[0..first.iov_len]);
     }
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         var nwritten: usize = undefined;
         switch (wasi.fd_write(fd, iov.ptr, iov.len, &nwritten)) {
             wasi.ESUCCESS => return nwritten,
@@ -868,7 +868,7 @@ pub fn pwrite(fd: fd_t, bytes: []const u8, offset: u64) PWriteError!usize {
     if (std.Target.current.os.tag == .windows) {
         return windows.WriteFile(fd, bytes, offset, std.io.default_mode);
     }
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         const ciovs = [1]iovec_const{iovec_const{
             .iov_base = bytes.ptr,
             .iov_len = bytes.len,
@@ -969,7 +969,7 @@ pub fn pwritev(fd: fd_t, iov: []const iovec_const, offset: u64) PWriteError!usiz
         const first = iov[0];
         return pwrite(fd, first.iov_base[0..first.iov_len], offset);
     }
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         var nwritten: usize = undefined;
         switch (wasi.fd_pwrite(fd, iov.ptr, iov.len, offset, &nwritten)) {
             wasi.ESUCCESS => return nwritten,
@@ -1628,7 +1628,7 @@ pub fn symlinkZ(target_path: [*:0]const u8, sym_link_path: [*:0]const u8) SymLin
 /// If `sym_link_path` exists, it will not be overwritten.
 /// See also `symlinkatWasi`, `symlinkatZ` and `symlinkatW`.
 pub fn symlinkat(target_path: []const u8, newdirfd: fd_t, sym_link_path: []const u8) SymLinkError!void {
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         return symlinkatWasi(target_path, newdirfd, sym_link_path);
     }
     if (builtin.os.tag == .windows) {
@@ -1857,7 +1857,7 @@ pub fn unlinkat(dirfd: fd_t, file_path: []const u8, flags: u32) UnlinkatError!vo
     if (builtin.os.tag == .windows) {
         const file_path_w = try windows.sliceToPrefixedFileW(file_path);
         return unlinkatW(dirfd, file_path_w.span(), flags);
-    } else if (builtin.os.tag == .wasi) {
+    } else if (builtin.os.tag == .wasi and !builtin.link_libc) {
         return unlinkatWasi(dirfd, file_path, flags);
     } else {
         const file_path_c = try toPosixPath(file_path);
@@ -2024,7 +2024,7 @@ pub fn renameat(
         const old_path_w = try windows.sliceToPrefixedFileW(old_path);
         const new_path_w = try windows.sliceToPrefixedFileW(new_path);
         return renameatW(old_dir_fd, old_path_w.span(), new_dir_fd, new_path_w.span(), windows.TRUE);
-    } else if (builtin.os.tag == .wasi) {
+    } else if (builtin.os.tag == .wasi and !builtin.link_libc) {
         return renameatWasi(old_dir_fd, old_path, new_dir_fd, new_path);
     } else {
         const old_path_c = try toPosixPath(old_path);
@@ -2160,7 +2160,7 @@ pub fn mkdirat(dir_fd: fd_t, sub_dir_path: []const u8, mode: u32) MakeDirError!v
     if (builtin.os.tag == .windows) {
         const sub_dir_path_w = try windows.sliceToPrefixedFileW(sub_dir_path);
         return mkdiratW(dir_fd, sub_dir_path_w.span(), mode);
-    } else if (builtin.os.tag == .wasi) {
+    } else if (builtin.os.tag == .wasi and !builtin.link_libc) {
         return mkdiratWasi(dir_fd, sub_dir_path, mode);
     } else {
         const sub_dir_path_c = try toPosixPath(sub_dir_path);
@@ -2520,7 +2520,7 @@ pub fn readlinkZ(file_path: [*:0]const u8, out_buffer: []u8) ReadLinkError![]u8 
 /// The return value is a slice of `out_buffer` from index 0.
 /// See also `readlinkatWasi`, `realinkatZ` and `realinkatW`.
 pub fn readlinkat(dirfd: fd_t, file_path: []const u8, out_buffer: []u8) ReadLinkError![]u8 {
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         return readlinkatWasi(dirfd, file_path, out_buffer);
     }
     if (builtin.os.tag == .windows) {
@@ -3482,7 +3482,7 @@ pub const FStatError = error{
 
 /// Return information about a file descriptor.
 pub fn fstat(fd: fd_t) FStatError!Stat {
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         var stat: wasi.filestat_t = undefined;
         switch (wasi.fd_filestat_get(fd, &stat)) {
             wasi.ESUCCESS => return Stat.fromFilestat(stat),
@@ -3520,7 +3520,7 @@ pub const FStatAtError = FStatError || error{ NameTooLong, FileNotFound, SymLink
 /// which is relative to `dirfd` handle.
 /// See also `fstatatZ` and `fstatatWasi`.
 pub fn fstatat(dirfd: fd_t, pathname: []const u8, flags: u32) FStatAtError!Stat {
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         return fstatatWasi(dirfd, pathname, flags);
     } else if (builtin.os.tag == .windows) {
         @compileError("fstatat is not yet implemented on Windows");
@@ -4122,7 +4122,7 @@ pub fn lseek_SET(fd: fd_t, offset: u64) SeekError!void {
     if (builtin.os.tag == .windows) {
         return windows.SetFilePointerEx_BEGIN(fd, offset);
     }
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         var new_offset: wasi.filesize_t = undefined;
         switch (wasi.fd_seek(fd, @bitCast(wasi.filedelta_t, offset), wasi.WHENCE_SET, &new_offset)) {
             wasi.ESUCCESS => return,
@@ -4170,7 +4170,7 @@ pub fn lseek_CUR(fd: fd_t, offset: i64) SeekError!void {
     if (builtin.os.tag == .windows) {
         return windows.SetFilePointerEx_CURRENT(fd, offset);
     }
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         var new_offset: wasi.filesize_t = undefined;
         switch (wasi.fd_seek(fd, offset, wasi.WHENCE_CUR, &new_offset)) {
             wasi.ESUCCESS => return,
@@ -4217,7 +4217,7 @@ pub fn lseek_END(fd: fd_t, offset: i64) SeekError!void {
     if (builtin.os.tag == .windows) {
         return windows.SetFilePointerEx_END(fd, offset);
     }
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         var new_offset: wasi.filesize_t = undefined;
         switch (wasi.fd_seek(fd, offset, wasi.WHENCE_END, &new_offset)) {
             wasi.ESUCCESS => return,
@@ -4264,7 +4264,7 @@ pub fn lseek_CUR_get(fd: fd_t) SeekError!u64 {
     if (builtin.os.tag == .windows) {
         return windows.SetFilePointerEx_CURRENT_get(fd);
     }
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         var new_offset: wasi.filesize_t = undefined;
         switch (wasi.fd_seek(fd, 0, wasi.WHENCE_CUR, &new_offset)) {
             wasi.ESUCCESS => return new_offset,
@@ -4664,7 +4664,7 @@ pub const ClockGetTimeError = error{UnsupportedClock} || UnexpectedError;
 /// TODO: change this to return the timespec as a return value
 /// TODO: look into making clk_id an enum
 pub fn clock_gettime(clk_id: i32, tp: *timespec) ClockGetTimeError!void {
-    if (std.Target.current.os.tag == .wasi) {
+    if (std.Target.current.os.tag == .wasi and !builtin.link_libc) {
         var ts: timestamp_t = undefined;
         switch (system.clock_time_get(@bitCast(u32, clk_id), 1, &ts)) {
             0 => {
@@ -4705,7 +4705,7 @@ pub fn clock_gettime(clk_id: i32, tp: *timespec) ClockGetTimeError!void {
 }
 
 pub fn clock_getres(clk_id: i32, res: *timespec) ClockGetTimeError!void {
-    if (std.Target.current.os.tag == .wasi) {
+    if (std.Target.current.os.tag == .wasi and !builtin.link_libc) {
         var ts: timestamp_t = undefined;
         switch (system.clock_res_get(@bitCast(u32, clk_id), &ts)) {
             0 => res.* = .{
@@ -4833,7 +4833,7 @@ pub const FutimensError = error{
 } || UnexpectedError;
 
 pub fn futimens(fd: fd_t, times: *const [2]timespec) FutimensError!void {
-    if (builtin.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi and !builtin.link_libc) {
         // TODO WASI encodes `wasi.fstflags` to signify magic values
         // similar to UTIME_NOW and UTIME_OMIT. Currently, we ignore
         // this here, but we should really handle it somehow.
@@ -5580,7 +5580,10 @@ var has_copy_file_range_syscall = std.atomic.Atomic(bool).init(true);
 ///
 /// Maximum offsets on Linux are `math.maxInt(i64)`.
 pub fn copy_file_range(fd_in: fd_t, off_in: u64, fd_out: fd_t, off_out: u64, len: usize, flags: u32) CopyFileRangeError!usize {
-    const call_cfr = comptime if (builtin.link_libc)
+    const call_cfr = comptime if (std.Target.current.os.tag == .wasi)
+        // WASI-libc doesn't have copy_file_range.
+        false
+    else if (builtin.link_libc)
         std.c.versionCheck(.{ .major = 2, .minor = 27, .patch = 0 }).ok
     else
         std.Target.current.os.isAtLeast(.linux, .{ .major = 4, .minor = 5 }) orelse true;

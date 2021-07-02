@@ -31,6 +31,7 @@ pub usingnamespace switch (std.Target.current.os.tag) {
     .fuchsia => @import("c/fuchsia.zig"),
     .minix => @import("c/minix.zig"),
     .emscripten => @import("c/emscripten.zig"),
+    .wasi => @import("c/wasi.zig"),
     else => struct {},
 };
 
@@ -77,6 +78,7 @@ pub extern "c" fn fread(noalias ptr: [*]u8, size_of_type: usize, item_count: usi
 
 pub extern "c" fn printf(format: [*:0]const u8, ...) c_int;
 pub extern "c" fn abort() noreturn;
+
 pub extern "c" fn exit(code: c_int) noreturn;
 pub extern "c" fn _exit(code: c_int) noreturn;
 pub extern "c" fn isatty(fd: fd_t) c_int;

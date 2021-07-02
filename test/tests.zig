@@ -58,6 +58,14 @@ const test_targets = blk: {
             .link_libc = false,
             .single_threaded = true,
         },
+        TestTarget{
+            .target = .{
+                .cpu_arch = .wasm32,
+                .os_tag = .wasi,
+            },
+            .link_libc = true,
+            .single_threaded = true,
+        },
 
         TestTarget{
             .target = .{

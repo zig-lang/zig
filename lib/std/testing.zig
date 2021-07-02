@@ -4,6 +4,8 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("std.zig");
+const builtin = @import("builtin");
+
 const math = std.math;
 const print = std.debug.print;
 
@@ -326,7 +328,7 @@ pub const TmpDir = struct {
 };
 
 fn getCwdOrWasiPreopen() std.fs.Dir {
-    if (std.builtin.os.tag == .wasi) {
+    if (std.builtin.os.tag == .wasi and !builtin.link_libc) {
         var preopens = std.fs.wasi.PreopenList.init(allocator);
         defer preopens.deinit();
         preopens.populate() catch
