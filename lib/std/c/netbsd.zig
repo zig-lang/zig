@@ -94,3 +94,6 @@ pub const pthread_attr_t = extern struct {
 };
 
 pub const sem_t = ?*opaque {};
+
+pub extern "c" fn pthread_setname_np(thread: std.c.pthread_t, name: [*:0]const u8, arg: ?*c_void) c_int;
+pub extern "c" fn pthread_getname_np(thread: std.c.pthread_t, name: [*:0]u8, len: usize) c_int;

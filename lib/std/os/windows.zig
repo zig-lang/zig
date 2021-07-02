@@ -1631,6 +1631,10 @@ pub fn HeapDestroy(hHeap: HANDLE) void {
     assert(kernel32.HeapDestroy(hHeap) != 0);
 }
 
+pub fn LocalFree(hMem: HLOCAL) void {
+    assert(kernel32.LocalFree(hMem) == null);
+}
+
 pub const GetFileInformationByHandleError = error{Unexpected};
 
 pub fn GetFileInformationByHandle(
@@ -2009,6 +2013,21 @@ pub fn unexpectedStatus(status: NTSTATUS) std.os.UnexpectedError {
         std.debug.dumpCurrentStackTrace(null);
     }
     return error.Unexpected;
+}
+
+pub fn SetThreadDescription(hThread: HANDLE, lpThreadDescription: LPCWSTR) !void {
+    if (kernel32.SetThreadDescription(hThread, lpThreadDescription) == 0) {
+        switch (kernel32.GetLastError()) {
+            else => |err| return unexpectedError(err),
+        }
+    }
+}
+pub fn GetThreadDescription(hThread: HANDLE, ppszThreadDescription: *LPWSTR) !void {
+    if (kernel32.GetThreadDescription(hThread, ppszThreadDescription) == 0) {
+        switch (kernel32.GetLastError()) {
+            else => |err| return unexpectedError(err),
+        }
+    }
 }
 
 test "" {

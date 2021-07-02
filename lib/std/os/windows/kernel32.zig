@@ -192,6 +192,8 @@ pub extern "kernel32" fn HeapValidate(hHeap: HANDLE, dwFlags: DWORD, lpMem: ?*co
 pub extern "kernel32" fn VirtualAlloc(lpAddress: ?LPVOID, dwSize: SIZE_T, flAllocationType: DWORD, flProtect: DWORD) callconv(WINAPI) ?LPVOID;
 pub extern "kernel32" fn VirtualFree(lpAddress: ?LPVOID, dwSize: SIZE_T, dwFreeType: DWORD) callconv(WINAPI) BOOL;
 
+pub extern "kernel32" fn LocalFree(hMem: HLOCAL) callconv(WINAPI) ?HLOCAL;
+
 pub extern "kernel32" fn MoveFileExW(
     lpExistingFileName: [*:0]const u16,
     lpNewFileName: [*:0]const u16,
@@ -342,3 +344,6 @@ pub extern "kernel32" fn SleepConditionVariableSRW(
 pub extern "kernel32" fn TryAcquireSRWLockExclusive(s: *SRWLOCK) callconv(WINAPI) BOOLEAN;
 pub extern "kernel32" fn AcquireSRWLockExclusive(s: *SRWLOCK) callconv(WINAPI) void;
 pub extern "kernel32" fn ReleaseSRWLockExclusive(s: *SRWLOCK) callconv(WINAPI) void;
+
+pub extern "kernel32" fn SetThreadDescription(hThread: HANDLE, lpThreadDescription: LPCWSTR) callconv(WINAPI) HRESULT;
+pub extern "kernel32" fn GetThreadDescription(hThread: HANDLE, ppszThreadDescription: *LPWSTR) callconv(WINAPI) HRESULT;

@@ -185,6 +185,9 @@ const __SIZEOF_PTHREAD_MUTEX_T = if (os_tag == .fuchsia) 40 else switch (abi) {
 };
 const __SIZEOF_SEM_T = 4 * @sizeOf(usize);
 
+pub extern "c" fn pthread_setname_np(thread: std.c.pthread_t, name: [*:0]const u8) c_int;
+pub extern "c" fn pthread_getname_np(thread: std.c.pthread_t, name: [*:0]u8, len: usize) c_int;
+
 pub const RTLD_LAZY = 1;
 pub const RTLD_NOW = 2;
 pub const RTLD_NOLOAD = 4;
