@@ -439,7 +439,7 @@ static LLVMValueRef make_fn_llvm_value(CodeGen *g, ZigFn *fn) {
         // This is the intended behavior of wasm-ld, because Wasm has a concept of host functions,
         // which are undefined functions supposed to be resolved by host runtimes *with module names*
         // at load times even if it is "static linked" with the linker.
-        use_mangled_name = use_mangled_name && (!strcmp(buf_ptr(fn_proto->lib_name), "c"));
+        use_mangled_name = use_mangled_name && (strcmp(buf_ptr(fn_proto->lib_name), "c") != 0);
         // Pick a weird name to avoid collisions...
         // This whole function should be burned to the ground.
         Buf *mangled_symbol_buf = use_mangled_name ?
