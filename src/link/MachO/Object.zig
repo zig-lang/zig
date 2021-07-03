@@ -15,6 +15,7 @@ const Allocator = mem.Allocator;
 const Arch = std.Target.Cpu.Arch;
 const Relocation = reloc.Relocation;
 const Symbol = @import("Symbol.zig");
+const TextBlock = @import("Zld.zig").TextBlock;
 
 usingnamespace @import("commands.zig");
 
@@ -271,6 +272,7 @@ pub fn parse(self: *Object) !void {
     try self.parseSymtab();
     try self.parseDataInCode();
     try self.parseInitializers();
+    try self.parseDummy();
 }
 
 pub fn readLoadCommands(self: *Object, reader: anytype) !void {
@@ -376,6 +378,110 @@ pub fn parseSections(self: *Object) !void {
         }
 
         self.sections.appendAssumeCapacity(section);
+    }
+}
+
+fn cmpNlist(_: void, lhs: macho.nlist_64, rhs: macho.nlist_64) bool {
+    return lhs.n_value < rhs.n_value;
+}
+
+fn filterSymsInSection(symbols: []macho.nlist_64, sect_id: u8) []macho.nlist_64 {
+    var start: usize = 0;
+    var end: usize = symbols.len;
+
+    while (true) {
+        var change = false;
+        if (symbols[start].n_sect != sect_id) {
+            start += 1;
+            change = true;
+        }
+        if (symbols[end - 1].n_sect != sect_id) {
+            end -= 1;
+            change = true;
+        }
+
+        if (start == end) break;
+        if (!change) break;
+    }
+
+    return symbols[start..end];
+}
+
+pub fn parseDummy(self: *Object) !void {
+    const seg = self.load_commands.items[self.segment_cmd_index.?].Segment;
+
+    log.warn("analysing {s}", .{self.name.?});
+
+    const dysymtab = self.load_commands.items[self.dysymtab_cmd_index.?].Dysymtab;
+
+    var sorted_syms = std.ArrayList(macho.nlist_64).init(self.allocator);
+    defer sorted_syms.deinit();
+    try sorted_syms.appendSlice(self.symtab.items[dysymtab.ilocalsym..dysymtab.iundefsym]);
+
+    std.sort.sort(macho.nlist_64, sorted_syms.items, {}, cmpNlist);
+
+    for (seg.sections.items) |sect, sect_id| {
+        log.warn("section {s},{s}", .{ parseName(&sect.segname), parseName(&sect.sectname) });
+        // Read code
+        var code = try self.allocator.alloc(u8, @intCast(usize, sect.size));
+        defer self.allocator.free(code);
+        _ = try self.file.?.preadAll(code, sect.offset);
+
+        // Read and parse relocs
+        const raw_relocs = try self.allocator.alloc(u8, @sizeOf(macho.relocation_info) * sect.nreloc);
+        defer self.allocator.free(raw_relocs);
+        _ = try self.file.?.preadAll(raw_relocs, sect.reloff);
+
+        const relocs = try reloc.parse(
+            self.allocator,
+            self.arch.?,
+            code,
+            mem.bytesAsSlice(macho.relocation_info, raw_relocs),
+        );
+
+        if (self.header.?.flags & macho.MH_SUBSECTIONS_VIA_SYMBOLS != 0) {
+            const syms = filterSymsInSection(sorted_syms.items, @intCast(u8, sect_id + 1));
+
+            var indices = std.ArrayList(u32).init(self.allocator);
+            defer indices.deinit();
+
+            var i: u32 = 0;
+            while (i < syms.len) : (i += 1) {
+                const curr = syms[i];
+                try indices.append(i);
+
+                const next: ?macho.nlist_64 = if (i + 1 < syms.len)
+                    syms[i + 1]
+                else
+                    null;
+
+                if (next) |n| {
+                    if (curr.n_value == n.n_value) {
+                        continue;
+                    }
+                }
+
+                const start_addr = curr.n_value - sect.addr;
+                const end_addr = if (next) |n| n.n_value - sect.addr else sect.size;
+                const alignment = sect.@"align";
+
+                const tb_code = code[start_addr..end_addr];
+                const size = tb_code.len;
+
+                log.warn("TextBlock", .{});
+                for (indices.items) |id| {
+                    log.warn("  | symbol {s}", .{self.getString(syms[id].n_strx)});
+                }
+                log.warn("  | start_addr = 0x{x}", .{start_addr});
+                log.warn("  | end_addr = 0x{x}", .{end_addr});
+                log.warn("  | size = {}", .{size});
+                log.warn("  | alignment = 0x{x}", .{alignment});
+
+                indices.clearRetainingCapacity();
+            }
+        } else {
+            return error.TODOOneLargeTextBlock;
+        }
     }
 }
 

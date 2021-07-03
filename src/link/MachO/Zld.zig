@@ -17,6 +17,7 @@ const Archive = @import("Archive.zig");
 const CodeSignature = @import("CodeSignature.zig");
 const Dylib = @import("Dylib.zig");
 const Object = @import("Object.zig");
+const Relocation = reloc.Relocation;
 const StringTable = @import("StringTable.zig");
 const Symbol = @import("Symbol.zig");
 const Trie = @import("Trie.zig");
@@ -133,6 +134,16 @@ const TlvOffset = struct {
     }
 };
 
+pub const TextBlock = struct {
+    local_sym_index: ?u32 = null,
+    size: u64,
+    alignment: u32,
+    code: []u8,
+    relocs: []*Relocation,
+    segment_id: u16,
+    section_id: u16,
+};
+
 /// Default path to dyld
 const DEFAULT_DYLD_PATH: [*:0]const u8 = "/usr/lib/dyld";
 
@@ -236,19 +247,6 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     try self.allocateSymbols();
     try self.allocateTentativeSymbols();
     try self.allocateProxyBindAddresses();
-
-    // log.warn("globals", .{});
-    // for (self.globals.values()) |value| {
-    //     log.warn("  | {s}: {}", .{ value.name, value.payload });
-    // }
-
-    // for (self.objects.items) |object| {
-    //     log.warn("object {s}", .{object.name.?});
-    //     for (object.symbols.items) |sym| {
-    //         log.warn("  | {s}: {}", .{ sym.name, sym.payload });
-    //     }
-    // }
-
     try self.flush();
 }
 
