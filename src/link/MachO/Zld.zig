@@ -237,20 +237,19 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     try self.allocateTentativeSymbols();
     try self.allocateProxyBindAddresses();
 
-    log.warn("globals", .{});
-    for (self.globals.values()) |value| {
-        log.warn("  | {s}: {}", .{ value.name, value.payload });
-    }
+    // log.warn("globals", .{});
+    // for (self.globals.values()) |value| {
+    //     log.warn("  | {s}: {}", .{ value.name, value.payload });
+    // }
 
-    for (self.objects.items) |object| {
-        log.warn("object {s}", .{object.name.?});
-        for (object.symbols.items) |sym| {
-            log.warn("  | {s}: {}", .{ sym.name, sym.payload });
-        }
-    }
+    // for (self.objects.items) |object| {
+    //     log.warn("object {s}", .{object.name.?});
+    //     for (object.symbols.items) |sym| {
+    //         log.warn("  | {s}: {}", .{ sym.name, sym.payload });
+    //     }
+    // }
 
-    return error.TODO;
-    // try self.flush();
+    try self.flush();
 }
 
 fn parseInputFiles(self: *Zld, files: []const []const u8, syslibroot: ?[]const u8) !void {
@@ -1226,7 +1225,7 @@ fn writeStubHelperCommon(self: *Zld) !void {
                 code[9] = 0xff;
                 code[10] = 0x25;
                 {
-                    const dyld_stub_binder = self.imports.get("dyld_stub_binder").?;
+                    const dyld_stub_binder = self.globals.get("dyld_stub_binder").?;
                     const addr = (got.addr + dyld_stub_binder.got_index.? * @sizeOf(u64));
                     const displacement = try math.cast(u32, addr - stub_helper.addr - code_size);
                     mem.writeIntLittle(u32, code[11..], displacement);
@@ -1270,7 +1269,7 @@ fn writeStubHelperCommon(self: *Zld) !void {
                 code[10] = 0xbf;
                 code[11] = 0xa9;
                 binder_blk_outer: {
-                    const dyld_stub_binder = self.imports.get("dyld_stub_binder").?;
+                    const dyld_stub_binder = self.globals.get("dyld_stub_binder").?;
                     const this_addr = stub_helper.addr + 3 * @sizeOf(u32);
                     const target_addr = (got.addr + dyld_stub_binder.got_index.? * @sizeOf(u64));
                     binder_blk: {
@@ -1789,8 +1788,8 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
                                     break :rebase false;
                                 }
                                 if (rel.target == .symbol) {
-                                    const final = object.symbols.items[rel.target.symbol].getTopmostAlias();
-                                    if (final.cast(Symbol.Proxy)) |_| {
+                                    const sym = object.symbols.items[rel.target.symbol];
+                                    if (sym.payload == .proxy) {
                                         break :rebase false;
                                     }
                                 }
@@ -1832,9 +1831,8 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
                             const dc_seg = self.load_commands.items[self.data_const_segment_cmd_index.?].Segment;
                             const got = dc_seg.sections.items[self.got_section_index.?];
                             const sym = object.symbols.items[rel.target.symbol];
-                            const final = sym.getTopmostAlias();
-                            const got_index = final.got_index orelse {
-                                log.err("expected GOT index relocating symbol '{s}'", .{final.name});
+                            const got_index = sym.got_index orelse {
+                                log.err("expected GOT index relocating symbol '{s}'", .{sym.name});
                                 log.err("this is an internal linker error", .{});
                                 return error.FailedToResolveRelocationTarget;
                             };
@@ -1890,37 +1888,40 @@ fn relocTargetAddr(self: *Zld, object: *const Object, target: reloc.Relocation.T
         switch (target) {
             .symbol => |sym_id| {
                 const sym = object.symbols.items[sym_id];
-                const final = sym.getTopmostAlias();
-                if (final.cast(Symbol.Regular)) |reg| {
-                    log.debug("    | regular '{s}'", .{sym.name});
-                    break :blk reg.address;
-                } else if (final.cast(Symbol.Proxy)) |proxy| {
-                    if (mem.eql(u8, sym.name, "__tlv_bootstrap")) {
-                        log.debug("    | symbol '__tlv_bootstrap'", .{});
-                        const segment = self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-                        const tlv = segment.sections.items[self.tlv_section_index.?];
-                        break :blk tlv.addr;
-                    }
-
-                    log.debug("    | symbol stub '{s}'", .{sym.name});
-                    const segment = self.load_commands.items[self.text_segment_cmd_index.?].Segment;
-                    const stubs = segment.sections.items[self.stubs_section_index.?];
-                    const stubs_index = proxy.base.stubs_index orelse {
-                        if (proxy.bind_info.items.len > 0) {
-                            break :blk 0; // Dynamically bound by dyld.
+                switch (sym.payload) {
+                    .regular => |reg| {
+                        log.debug("    | regular '{s}'", .{sym.name});
+                        break :blk reg.address;
+                    },
+                    .proxy => |proxy| {
+                        if (mem.eql(u8, sym.name, "__tlv_bootstrap")) {
+                            log.debug("    | symbol '__tlv_bootstrap'", .{});
+                            const segment = self.load_commands.items[self.data_segment_cmd_index.?].Segment;
+                            const tlv = segment.sections.items[self.tlv_section_index.?];
+                            break :blk tlv.addr;
                         }
-                        log.err(
-                            "expected stubs index or dynamic bind address when relocating symbol '{s}'",
-                            .{final.name},
-                        );
+
+                        log.debug("    | symbol stub '{s}'", .{sym.name});
+                        const segment = self.load_commands.items[self.text_segment_cmd_index.?].Segment;
+                        const stubs = segment.sections.items[self.stubs_section_index.?];
+                        const stubs_index = sym.stubs_index orelse {
+                            if (proxy.bind_info.items.len > 0) {
+                                break :blk 0; // Dynamically bound by dyld.
+                            }
+                            log.err(
+                                "expected stubs index or dynamic bind address when relocating symbol '{s}'",
+                                .{sym.name},
+                            );
+                            log.err("this is an internal linker error", .{});
+                            return error.FailedToResolveRelocationTarget;
+                        };
+                        break :blk stubs.addr + stubs_index * stubs.reserved2;
+                    },
+                    else => {
+                        log.err("failed to resolve symbol '{s}' as a relocation target", .{sym.name});
                         log.err("this is an internal linker error", .{});
                         return error.FailedToResolveRelocationTarget;
-                    };
-                    break :blk stubs.addr + stubs_index * stubs.reserved2;
-                } else {
-                    log.err("failed to resolve symbol '{s}' as a relocation target", .{sym.name});
-                    log.err("this is an internal linker error", .{});
-                    return error.FailedToResolveRelocationTarget;
+                    },
                 }
             },
             .section => |sect_id| {
@@ -2320,8 +2321,8 @@ fn flush(self: *Zld) !void {
         defer initializers.deinit();
 
         for (self.objects.items) |object| {
-            for (object.initializers.items) |initializer| {
-                const address = initializer.cast(Symbol.Regular).?.address;
+            for (object.initializers.items) |sym_id| {
+                const address = object.symbols.items[sym_id].payload.regular.address;
                 try initializers.append(address);
             }
         }
@@ -2381,7 +2382,10 @@ fn writeGotEntries(self: *Zld) !void {
     var writer = stream.writer();
 
     for (self.got_entries.items) |sym| {
-        const address: u64 = if (sym.cast(Symbol.Regular)) |reg| reg.address else 0;
+        const address: u64 = switch (sym.payload) {
+            .regular => |reg| reg.address,
+            else => 0,
+        };
         try writer.writeIntLittle(u64, address);
     }
 
@@ -2397,9 +2401,8 @@ fn setEntryPoint(self: *Zld) !void {
     // entrypoint. For now, assume default of `_main`.
     const seg = self.load_commands.items[self.text_segment_cmd_index.?].Segment;
     const sym = self.globals.get("_main") orelse return error.MissingMainEntrypoint;
-    const entry_sym = sym.cast(Symbol.Regular) orelse unreachable;
     const ec = &self.load_commands.items[self.main_cmd_index.?].Main;
-    ec.entryoff = @intCast(u32, entry_sym.address - seg.inner.vmaddr);
+    ec.entryoff = @intCast(u32, sym.payload.regular.address - seg.inner.vmaddr);
     ec.stacksize = self.stack_size;
 }
 
@@ -2417,7 +2420,8 @@ fn writeRebaseInfoTable(self: *Zld) !void {
         const segment_id = @intCast(u16, self.data_const_segment_cmd_index.?);
 
         for (self.got_entries.items) |sym| {
-            if (sym.@"type" == .proxy) continue;
+            if (sym.payload == .proxy) continue;
+
             try pointers.append(.{
                 .offset = base_offset + sym.got_index.? * @sizeOf(u64),
                 .segment_id = segment_id,
@@ -2489,28 +2493,30 @@ fn writeBindInfoTable(self: *Zld) !void {
         const segment_id = @intCast(u16, self.data_const_segment_cmd_index.?);
 
         for (self.got_entries.items) |sym| {
-            if (sym.cast(Symbol.Proxy)) |proxy| {
-                try pointers.append(.{
-                    .offset = base_offset + proxy.base.got_index.? * @sizeOf(u64),
-                    .segment_id = segment_id,
-                    .dylib_ordinal = proxy.dylibOrdinal(),
-                    .name = proxy.base.name,
-                });
-            }
+            if (sym.payload != .proxy) continue;
+
+            const proxy = sym.payload.proxy;
+            try pointers.append(.{
+                .offset = base_offset + sym.got_index.? * @sizeOf(u64),
+                .segment_id = segment_id,
+                .dylib_ordinal = proxy.dylibOrdinal(),
+                .name = sym.name,
+            });
         }
     }
 
-    for (self.imports.values()) |sym| {
-        if (sym.cast(Symbol.Proxy)) |proxy| {
-            for (proxy.bind_info.items) |info| {
-                const seg = self.load_commands.items[info.segment_id].Segment;
-                try pointers.append(.{
-                    .offset = info.address - seg.inner.vmaddr,
-                    .segment_id = info.segment_id,
-                    .dylib_ordinal = proxy.dylibOrdinal(),
-                    .name = proxy.base.name,
-                });
-            }
+    for (self.globals.values()) |sym| {
+        if (sym.payload != .proxy) continue;
+
+        const proxy = sym.payload.proxy;
+        for (proxy.bind_info.items) |info| {
+            const seg = self.load_commands.items[info.segment_id].Segment;
+            try pointers.append(.{
+                .offset = info.address - seg.inner.vmaddr,
+                .segment_id = info.segment_id,
+                .dylib_ordinal = proxy.dylibOrdinal(),
+                .name = sym.name,
+            });
         }
     }
 
@@ -2520,14 +2526,13 @@ fn writeBindInfoTable(self: *Zld) !void {
         const base_offset = sect.addr - seg.inner.vmaddr;
         const segment_id = @intCast(u16, self.data_segment_cmd_index.?);
 
-        const sym = self.imports.get("__tlv_bootstrap") orelse unreachable;
-        const proxy = sym.cast(Symbol.Proxy) orelse unreachable;
-
+        const sym = self.globals.get("__tlv_bootstrap") orelse unreachable;
+        const proxy = sym.payload.proxy;
         try pointers.append(.{
             .offset = base_offset,
             .segment_id = segment_id,
             .dylib_ordinal = proxy.dylibOrdinal(),
-            .name = proxy.base.name,
+            .name = sym.name,
         });
     }
 
@@ -2562,7 +2567,7 @@ fn writeLazyBindInfoTable(self: *Zld) !void {
         try pointers.ensureCapacity(self.stubs.items.len);
 
         for (self.stubs.items) |sym| {
-            const proxy = sym.cast(Symbol.Proxy) orelse unreachable;
+            const proxy = sym.payload.proxy;
             pointers.appendAssumeCapacity(.{
                 .offset = base_offset + sym.stubs_index.? * @sizeOf(u64),
                 .segment_id = segment_id,
@@ -2676,7 +2681,8 @@ fn writeExportInfo(self: *Zld) !void {
     defer sorted_globals.deinit();
 
     for (self.globals.values()) |sym| {
-        const reg = sym.cast(Symbol.Regular) orelse continue;
+        if (sym.payload != .regular) continue;
+        const reg = sym.payload.regular;
         if (reg.linkage != .global) continue;
         try sorted_globals.append(sym.name);
     }
@@ -2685,9 +2691,9 @@ fn writeExportInfo(self: *Zld) !void {
 
     for (sorted_globals.items) |sym_name| {
         const sym = self.globals.get(sym_name) orelse unreachable;
-        const reg = sym.cast(Symbol.Regular) orelse unreachable;
+        const reg = sym.payload.regular;
 
-        log.debug("  | putting '{s}' defined at 0x{x}", .{ reg.base.name, reg.address });
+        log.debug("  | putting '{s}' defined at 0x{x}", .{ sym.name, reg.address });
 
         try trie.put(.{
             .name = sym.name,
@@ -2722,50 +2728,33 @@ fn writeSymbolTable(self: *Zld) !void {
 
     var locals = std.ArrayList(macho.nlist_64).init(self.allocator);
     defer locals.deinit();
+    try locals.ensureTotalCapacity(self.locals.items.len);
+
+    for (self.locals.items) |symbol| {
+        if (symbol.isTemp()) continue; // TODO when merging codepaths, this should go into freelist
+        const nlist = try symbol.asNlist(&self.strtab);
+        locals.appendAssumeCapacity(nlist);
+    }
 
     var exports = std.ArrayList(macho.nlist_64).init(self.allocator);
     defer exports.deinit();
 
-    for (self.objects.items) |object| {
-        for (object.stabs.items) |sym| {
-            const stab = sym.cast(Symbol.Stab) orelse unreachable;
-
-            const nlists = try stab.asNlists(self.allocator, &self.strtab);
-            defer self.allocator.free(nlists);
-
-            try locals.appendSlice(nlists);
-        }
-
-        for (object.symbols.items) |sym| {
-            const final = sym.getTopmostAlias();
-            if (final.@"type" != .regular) continue;
-
-            const reg = final.cast(Symbol.Regular) orelse unreachable;
-            if (reg.isTemp()) continue;
-            if (reg.visited) continue;
-
-            const nlist = try reg.asNlist(&self.strtab);
-
-            switch (reg.linkage) {
-                .translation_unit => {
-                    try locals.append(nlist);
-                },
-                else => {
-                    try exports.append(nlist);
-                },
-            }
-
-            reg.visited = true;
-        }
-    }
-
     var undefs = std.ArrayList(macho.nlist_64).init(self.allocator);
     defer undefs.deinit();
+    var undef_dir = std.StringHashMap(u32).init(self.allocator);
+    defer undef_dir.deinit();
 
-    for (self.imports.values()) |sym| {
-        const proxy = sym.cast(Symbol.Proxy) orelse unreachable;
-        const nlist = try proxy.asNlist(&self.strtab);
-        try undefs.append(nlist);
+    for (self.globals.values()) |sym| {
+        const nlist = try sym.asNlist(&self.strtab);
+        switch (sym.payload) {
+            .regular => try exports.append(nlist),
+            .proxy => {
+                const id = @intCast(u32, undefs.items.len);
+                try undefs.append(nlist);
+                try undef_dir.putNoClobber(sym.name, id);
+            },
+            else => unreachable,
+        }
     }
 
     const nlocals = locals.items.len;
@@ -2827,24 +2816,27 @@ fn writeSymbolTable(self: *Zld) !void {
 
     stubs.reserved1 = 0;
     for (self.stubs.items) |sym| {
-        const id = self.imports.getIndex(sym.name) orelse unreachable;
-        try writer.writeIntLittle(u32, dysymtab.iundefsym + @intCast(u32, id));
+        const id = undef_dir.get(sym.name) orelse unreachable;
+        try writer.writeIntLittle(u32, dysymtab.iundefsym + id);
     }
 
     got.reserved1 = nstubs;
     for (self.got_entries.items) |sym| {
-        if (sym.@"type" == .proxy) {
-            const id = self.imports.getIndex(sym.name) orelse unreachable;
-            try writer.writeIntLittle(u32, dysymtab.iundefsym + @intCast(u32, id));
-        } else {
-            try writer.writeIntLittle(u32, macho.INDIRECT_SYMBOL_LOCAL);
+        switch (sym.payload) {
+            .proxy => {
+                const id = undef_dir.get(sym.name) orelse unreachable;
+                try writer.writeIntLittle(u32, dysymtab.iundefsym + id);
+            },
+            else => {
+                try writer.writeIntLittle(u32, macho.INDIRECT_SYMBOL_LOCAL);
+            },
         }
     }
 
     la_symbol_ptr.reserved1 = got.reserved1 + ngot_entries;
     for (self.stubs.items) |sym| {
-        const id = self.imports.getIndex(sym.name) orelse unreachable;
-        try writer.writeIntLittle(u32, dysymtab.iundefsym + @intCast(u32, id));
+        const id = undef_dir.get(sym.name) orelse unreachable;
+        try writer.writeIntLittle(u32, dysymtab.iundefsym + id);
     }
 
     try self.file.?.pwriteAll(buf, dysymtab.indirectsymoff);

@@ -58,13 +58,6 @@ pub const Regular = struct {
         global,
     };
 
-    pub fn isTemp(regular: Regular) bool {
-        if (regular.linkage == .translation_unit) {
-            return mem.startsWith(u8, regular.base.name, "l") or mem.startsWith(u8, regular.base.name, "L");
-        }
-        return false;
-    }
-
     pub fn format(self: Regular, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         try std.fmt.format(writer, "Regular {{ ", .{});
         try std.fmt.format(writer, ".linkage = {s},  ", .{self.linkage});
@@ -164,7 +157,19 @@ pub fn new(allocator: *Allocator, name: []const u8) !*Symbol {
     return new_sym;
 }
 
-pub fn asNlist(symbol: *Symbol, strtab: *StringTable) macho.nlist_64 {
+pub fn isTemp(symbol: Symbol) bool {
+    switch (symbol.payload) {
+        .regular => |regular| {
+            if (regular.linkage == .translation_unit) {
+                return mem.startsWith(u8, symbol.name, "l") or mem.startsWith(u8, symbol.name, "L");
+            }
+        },
+        else => {},
+    }
+    return false;
+}
+
+pub fn asNlist(symbol: *Symbol, strtab: *StringTable) !macho.nlist_64 {
     const n_strx = try strtab.getOrPut(symbol.name);
     const nlist = nlist: {
         switch (symbol.payload) {
