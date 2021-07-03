@@ -108,6 +108,7 @@ globals: std.StringArrayHashMapUnmanaged(*Symbol) = .{},
 /// Offset into __DATA,__common section.
 /// Set if the linker found tentative definitions in any of the objects.
 tentative_defs_offset: u64 = 0,
+has_tentative_defs: bool = false,
 
 threadlocal_offsets: std.ArrayListUnmanaged(TlvOffset) = .{}, // TODO merge with Symbol abstraction
 local_rebases: std.ArrayListUnmanaged(Pointer) = .{},
@@ -222,20 +223,33 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     try self.parseInputFiles(files, args.syslibroot);
     try self.parseLibs(args.libs, args.syslibroot);
     try self.resolveSymbols();
+    try self.resolveStubsAndGotEntries();
+    try self.updateMetadata();
+    try self.sortSections();
+    try self.addRpaths(args.rpaths);
+    try self.addDataInCodeLC();
+    try self.addCodeSignatureLC();
+    try self.allocateTextSegment();
+    try self.allocateDataConstSegment();
+    try self.allocateDataSegment();
+    self.allocateLinkeditSegment();
+    try self.allocateSymbols();
+    try self.allocateTentativeSymbols();
+    try self.allocateProxyBindAddresses();
+
+    log.warn("globals", .{});
+    for (self.globals.values()) |value| {
+        log.warn("  | {s}: {}", .{ value.name, value.payload });
+    }
+
+    for (self.objects.items) |object| {
+        log.warn("object {s}", .{object.name.?});
+        for (object.symbols.items) |sym| {
+            log.warn("  | {s}: {}", .{ sym.name, sym.payload });
+        }
+    }
+
     return error.TODO;
-    // try self.resolveStubsAndGotEntries();
-    // try self.updateMetadata();
-    // try self.sortSections();
-    // try self.addRpaths(args.rpaths);
-    // try self.addDataInCodeLC();
-    // try self.addCodeSignatureLC();
-    // try self.allocateTextSegment();
-    // try self.allocateDataConstSegment();
-    // try self.allocateDataSegment();
-    // self.allocateLinkeditSegment();
-    // try self.allocateSymbols();
-    // try self.allocateTentativeSymbols();
-    // try self.allocateProxyBindAddresses();
     // try self.flush();
 }
 
@@ -351,7 +365,7 @@ fn updateMetadata(self: *Zld) !void {
 
     // Ensure we have __DATA,__common section if we have tentative definitions.
     // Update size and alignment of __DATA,__common section.
-    if (self.tentatives.values().len > 0) {
+    if (self.has_tentative_defs) {
         const data_seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
         const common_section_index = self.common_section_index orelse ind: {
             self.common_section_index = @intCast(u16, data_seg.sections.items.len);
@@ -364,10 +378,10 @@ fn updateMetadata(self: *Zld) !void {
 
         var max_align: u16 = 0;
         var added_size: u64 = 0;
-        for (self.tentatives.values()) |sym| {
-            const tent = sym.cast(Symbol.Tentative) orelse unreachable;
-            max_align = math.max(max_align, tent.alignment);
-            added_size += tent.size;
+        for (self.globals.values()) |sym| {
+            if (sym.payload != .tentative) continue;
+            max_align = math.max(max_align, sym.payload.tentative.alignment);
+            added_size += sym.payload.tentative.size;
         }
 
         common_sect.@"align" = math.max(common_sect.@"align", max_align);
@@ -1069,47 +1083,55 @@ fn allocateSegment(self: *Zld, index: u16, offset: u64) !void {
     seg.inner.vmsize = seg_size_aligned;
 }
 
-fn allocateSymbols(self: *Zld) !void {
-    for (self.objects.items) |object| {
-        for (object.symbols.items) |sym| {
-            const reg = sym.cast(Symbol.Regular) orelse continue;
+fn allocateSymbol(self: *Zld, symbol: *Symbol) !void {
+    const reg = &symbol.payload.regular;
+    const object = reg.file orelse return;
+    const source_sect = &object.sections.items[reg.section];
+    const target_map = source_sect.target_map orelse {
+        log.debug("section '{s},{s}' not mapped for symbol '{s}'", .{
+            parseName(&source_sect.inner.segname),
+            parseName(&source_sect.inner.sectname),
+            symbol.name,
+        });
+        return;
+    };
 
-            const source_sect = &object.sections.items[reg.section];
-            const target_map = source_sect.target_map orelse {
-                log.debug("section '{s},{s}' not mapped for symbol '{s}'", .{
-                    parseName(&source_sect.inner.segname),
-                    parseName(&source_sect.inner.sectname),
-                    sym.name,
-                });
-                continue;
-            };
+    const target_seg = self.load_commands.items[target_map.segment_id].Segment;
+    const target_sect = target_seg.sections.items[target_map.section_id];
+    const target_addr = target_sect.addr + target_map.offset;
+    const address = reg.address - source_sect.inner.addr + target_addr;
 
-            const target_seg = self.load_commands.items[target_map.segment_id].Segment;
-            const target_sect = target_seg.sections.items[target_map.section_id];
-            const target_addr = target_sect.addr + target_map.offset;
-            const address = reg.address - source_sect.inner.addr + target_addr;
+    log.debug("resolving symbol '{s}' at 0x{x}", .{ symbol.name, address });
 
-            log.debug("resolving symbol '{s}' at 0x{x}", .{ sym.name, address });
-
-            // TODO there might be a more generic way of doing this.
-            var section: u8 = 0;
-            for (self.load_commands.items) |cmd, cmd_id| {
-                if (cmd != .Segment) break;
-                if (cmd_id == target_map.segment_id) {
-                    section += @intCast(u8, target_map.section_id) + 1;
-                    break;
-                }
-                section += @intCast(u8, cmd.Segment.sections.items.len);
-            }
-
-            reg.address = address;
-            reg.section = section;
+    // TODO there might be a more generic way of doing this.
+    var section: u8 = 0;
+    for (self.load_commands.items) |cmd, cmd_id| {
+        if (cmd != .Segment) break;
+        if (cmd_id == target_map.segment_id) {
+            section += @intCast(u8, target_map.section_id) + 1;
+            break;
         }
+        section += @intCast(u8, cmd.Segment.sections.items.len);
+    }
+
+    reg.address = address;
+    reg.section = section;
+}
+
+fn allocateSymbols(self: *Zld) !void {
+    for (self.locals.items) |symbol| {
+        if (symbol.payload != .regular) continue;
+        try self.allocateSymbol(symbol);
+    }
+
+    for (self.globals.values()) |symbol| {
+        if (symbol.payload != .regular) continue;
+        try self.allocateSymbol(symbol);
     }
 }
 
 fn allocateTentativeSymbols(self: *Zld) !void {
-    if (self.tentatives.values().len == 0) return;
+    if (!self.has_tentative_defs) return;
 
     const data_seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
     const common_sect = &data_seg.sections.items[self.common_section_index.?];
@@ -1131,36 +1153,21 @@ fn allocateTentativeSymbols(self: *Zld) !void {
     }
 
     // Convert tentative definitions into regular symbols.
-    for (self.tentatives.values()) |sym| {
-        const tent = sym.cast(Symbol.Tentative) orelse unreachable;
-        const reg = try Symbol.Regular.new(self.allocator, tent.base.name, .{
-            .linkage = .global,
-            .address = base_address,
-            .section = section,
-            .weak_ref = false,
-            .file = tent.file,
-        });
-        reg.got_index = tent.base.got_index;
-        reg.stubs_index = tent.base.stubs_index;
+    for (self.globals.values()) |sym| {
+        if (sym.payload != .tentative) continue;
 
-        try self.globals.putNoClobber(self.allocator, reg.name, reg);
-        tent.base.alias = reg;
+        const address = mem.alignForwardGeneric(u64, base_address + sym.payload.tentative.size, alignment);
 
-        if (tent.base.got_index) |idx| {
-            self.got_entries.items[idx] = reg;
-        }
-        if (tent.base.stubs_index) |idx| {
-            self.stubs.items[idx] = reg;
-        }
+        log.debug("tentative definition '{s}' allocated from 0x{x} to 0x{x}", .{ sym.name, base_address, address });
 
-        const address = mem.alignForwardGeneric(u64, base_address + tent.size, alignment);
-
-        log.debug("tentative definition '{s}' allocated from 0x{x} to 0x{x}", .{
-            tent.base.name,
-            base_address,
-            address,
-        });
-
+        sym.payload = .{
+            .regular = .{
+                .linkage = .global,
+                .address = base_address,
+                .section = section,
+                .weak_ref = false,
+            },
+        };
         base_address = address;
     }
 }
@@ -1174,17 +1181,17 @@ fn allocateProxyBindAddresses(self: *Zld) !void {
                 if (rel.@"type" != .unsigned) continue; // GOT is currently special-cased
                 if (rel.target != .symbol) continue;
 
-                const sym = object.symbols.items[rel.target.symbol].getTopmostAlias();
-                if (sym.cast(Symbol.Proxy)) |proxy| {
-                    const target_map = sect.target_map orelse continue;
-                    const target_seg = self.load_commands.items[target_map.segment_id].Segment;
-                    const target_sect = target_seg.sections.items[target_map.section_id];
+                const sym = object.symbols.items[rel.target.symbol];
+                if (sym.payload != .proxy) continue;
 
-                    try proxy.bind_info.append(self.allocator, .{
-                        .segment_id = target_map.segment_id,
-                        .address = target_sect.addr + target_map.offset + rel.offset,
-                    });
-                }
+                const target_map = sect.target_map orelse continue;
+                const target_seg = self.load_commands.items[target_map.segment_id].Segment;
+                const target_sect = target_seg.sections.items[target_map.section_id];
+
+                try sym.payload.proxy.bind_info.append(self.allocator, .{
+                    .segment_id = target_map.segment_id,
+                    .address = target_sect.addr + target_map.offset + rel.offset,
+                });
             }
         }
     }
@@ -1586,6 +1593,14 @@ fn resolveSymbols(self: *Zld) !void {
         }
     }
 
+    // Mark if we need to allocate zerofill section for tentative definitions
+    for (self.globals.values()) |symbol| {
+        if (symbol.payload == .tentative) {
+            self.has_tentative_defs = true;
+            break;
+        }
+    }
+
     // Third pass, resolve symbols in dynamic libraries.
     {
         // Put dyld_stub_binder as an undefined special symbol.
@@ -1651,18 +1666,6 @@ fn resolveSymbols(self: *Zld) !void {
     }
 
     if (has_undefined) return error.UndefinedSymbolReference;
-
-    log.warn("globals", .{});
-    for (self.globals.values()) |value| {
-        log.warn("  | {s}: {}", .{ value.name, value.payload });
-    }
-
-    for (self.objects.items) |object| {
-        log.warn("object {s}", .{object.name.?});
-        for (object.symbols.items) |sym| {
-            log.warn("  | {s}: {}", .{ sym.name, sym.payload });
-        }
-    }
 }
 
 fn resolveStubsAndGotEntries(self: *Zld) !void {
@@ -1675,7 +1678,7 @@ fn resolveStubsAndGotEntries(self: *Zld) !void {
                 switch (rel.@"type") {
                     .unsigned => continue,
                     .got_page, .got_page_off, .got_load, .got, .pointer_to_got => {
-                        const sym = object.symbols.items[rel.target.symbol].getTopmostAlias();
+                        const sym = object.symbols.items[rel.target.symbol];
                         if (sym.got_index != null) continue;
 
                         const index = @intCast(u32, self.got_entries.items.len);
@@ -1687,11 +1690,11 @@ fn resolveStubsAndGotEntries(self: *Zld) !void {
                     else => {
                         if (rel.target != .symbol) continue;
 
-                        const sym = object.symbols.items[rel.target.symbol].getTopmostAlias();
-                        assert(sym.@"type" != .unresolved);
+                        const sym = object.symbols.items[rel.target.symbol];
+                        assert(sym.payload != .undef);
 
                         if (sym.stubs_index != null) continue;
-                        if (sym.@"type" != .proxy) continue;
+                        if (sym.payload != .proxy) continue;
 
                         const index = @intCast(u32, self.stubs.items.len);
                         sym.stubs_index = index;
@@ -1705,7 +1708,7 @@ fn resolveStubsAndGotEntries(self: *Zld) !void {
     }
 
     // Finally, put dyld_stub_binder as the final GOT entry
-    const sym = self.imports.get("dyld_stub_binder") orelse unreachable;
+    const sym = self.globals.get("dyld_stub_binder") orelse unreachable;
     const index = @intCast(u32, self.got_entries.items.len);
     sym.got_index = index;
     try self.got_entries.append(self.allocator, sym);
