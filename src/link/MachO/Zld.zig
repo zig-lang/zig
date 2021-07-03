@@ -104,7 +104,6 @@ objc_data_section_index: ?u16 = null,
 
 locals: std.ArrayListUnmanaged(*Symbol) = .{},
 globals: std.StringArrayHashMapUnmanaged(*Symbol) = .{},
-imports: std.StringArrayHashMapUnmanaged(*Symbol) = .{},
 
 /// Offset into __DATA,__common section.
 /// Set if the linker found tentative definitions in any of the objects.
@@ -171,12 +170,6 @@ pub fn deinit(self: *Zld) void {
         self.allocator.destroy(dylib);
     }
     self.dylibs.deinit(self.allocator);
-
-    for (self.imports.values()) |sym| {
-        sym.deinit(self.allocator);
-        self.allocator.destroy(sym);
-    }
-    self.imports.deinit(self.allocator);
 
     for (self.globals.values()) |sym| {
         sym.deinit(self.allocator);
@@ -1570,6 +1563,95 @@ fn resolveSymbols(self: *Zld) !void {
         try self.resolveSymbolsInObject(object);
     }
 
+    // Second pass, resolve symbols in static libraries.
+    var sym_it = self.globals.iterator();
+    while (sym_it.next()) |entry| {
+        const symbol = entry.value_ptr.*;
+        if (symbol.payload != .undef) continue;
+
+        for (self.archives.items) |archive| {
+            // Check if the entry exists in a static archive.
+            const offsets = archive.toc.get(symbol.name) orelse {
+                // No hit.
+                continue;
+            };
+            assert(offsets.items.len > 0);
+
+            const object = try archive.parseObject(offsets.items[0]);
+            try self.objects.append(self.allocator, object);
+            try self.resolveSymbolsInObject(object);
+
+            sym_it = self.globals.iterator();
+            break;
+        }
+    }
+
+    // Third pass, resolve symbols in dynamic libraries.
+    {
+        // Put dyld_stub_binder as an undefined special symbol.
+        const symbol = try Symbol.new(self.allocator, "dyld_stub_binder");
+        try self.globals.putNoClobber(self.allocator, symbol.name, symbol);
+    }
+
+    var referenced = std.AutoHashMap(*Dylib, void).init(self.allocator);
+    defer referenced.deinit();
+
+    loop: for (self.globals.values()) |symbol| {
+        if (symbol.payload != .undef) continue;
+
+        for (self.dylibs.items) |dylib| {
+            if (!dylib.symbols.contains(symbol.name)) continue;
+
+            try referenced.put(dylib, {});
+            symbol.payload = .{
+                .proxy = .{
+                    .file = dylib,
+                },
+            };
+            continue :loop;
+        }
+    }
+
+    // Add LC_LOAD_DYLIB load command for each referenced dylib/stub.
+    var it = referenced.iterator();
+    while (it.next()) |entry| {
+        const dylib = entry.key_ptr.*;
+        dylib.ordinal = self.next_dylib_ordinal;
+        const dylib_id = dylib.id orelse unreachable;
+        var dylib_cmd = try createLoadDylibCommand(
+            self.allocator,
+            dylib_id.name,
+            dylib_id.timestamp,
+            dylib_id.current_version,
+            dylib_id.compatibility_version,
+        );
+        errdefer dylib_cmd.deinit(self.allocator);
+        try self.load_commands.append(self.allocator, .{ .Dylib = dylib_cmd });
+        self.next_dylib_ordinal += 1;
+    }
+
+    // Fourth pass, handle synthetic symbols and flag any undefined references.
+    if (self.globals.get("___dso_handle")) |symbol| {
+        if (symbol.payload == .undef) {
+            symbol.payload = .{
+                .proxy = .{},
+            };
+        }
+    }
+
+    var has_undefined = false;
+    for (self.globals.values()) |symbol| {
+        if (symbol.payload != .undef) continue;
+
+        log.err("undefined reference to symbol '{s}'", .{symbol.name});
+        if (symbol.payload.undef.file) |file| {
+            log.err("  | referenced in {s}", .{file.name.?});
+        }
+        has_undefined = true;
+    }
+
+    if (has_undefined) return error.UndefinedSymbolReference;
+
     log.warn("globals", .{});
     for (self.globals.values()) |value| {
         log.warn("  | {s}: {}", .{ value.name, value.payload });
@@ -1581,112 +1663,6 @@ fn resolveSymbols(self: *Zld) !void {
             log.warn("  | {s}: {}", .{ sym.name, sym.payload });
         }
     }
-
-    // // Second pass, resolve symbols in static libraries.
-    // var next_sym: usize = 0;
-    // while (true) {
-    //     if (next_sym == self.unresolved.count()) break;
-
-    //     const sym = self.unresolved.values()[next_sym];
-
-    //     var reset: bool = false;
-    //     for (self.archives.items) |archive| {
-    //         // Check if the entry exists in a static archive.
-    //         const offsets = archive.toc.get(sym.name) orelse {
-    //             // No hit.
-    //             continue;
-    //         };
-    //         assert(offsets.items.len > 0);
-
-    //         const object = try archive.parseObject(offsets.items[0]);
-    //         try self.objects.append(self.allocator, object);
-    //         try self.resolveSymbolsInObject(object);
-
-    //         reset = true;
-    //         break;
-    //     }
-
-    //     if (reset) {
-    //         next_sym = 0;
-    //     } else {
-    //         next_sym += 1;
-    //     }
-    // }
-
-    // // Third pass, resolve symbols in dynamic libraries.
-    // var unresolved = std.ArrayList(*Symbol).init(self.allocator);
-    // defer unresolved.deinit();
-
-    // try unresolved.ensureCapacity(self.unresolved.count());
-    // for (self.unresolved.values()) |value| {
-    //     unresolved.appendAssumeCapacity(value);
-    // }
-    // self.unresolved.clearRetainingCapacity();
-
-    // // Put dyld_stub_binder as an unresolved special symbol.
-    // {
-    //     const name = try self.allocator.dupe(u8, "dyld_stub_binder");
-    //     errdefer self.allocator.free(name);
-    //     const undef = try Symbol.Unresolved.new(self.allocator, name, .{});
-    //     try unresolved.append(undef);
-    // }
-
-    // var referenced = std.AutoHashMap(*Dylib, void).init(self.allocator);
-    // defer referenced.deinit();
-
-    // loop: while (unresolved.popOrNull()) |undef| {
-    //     const proxy = self.imports.get(undef.name) orelse outer: {
-    //         const proxy = inner: {
-    //             for (self.dylibs.items) |dylib| {
-    //                 const proxy = (try dylib.createProxy(undef.name)) orelse continue;
-    //                 try referenced.put(dylib, {});
-    //                 break :inner proxy;
-    //             }
-    //             if (mem.eql(u8, undef.name, "___dso_handle")) {
-    //                 // TODO this is just a temp patch until I work out what to actually
-    //                 // do with ___dso_handle and __mh_execute_header symbols which are
-    //                 // synthetically created by the linker on macOS.
-    //                 break :inner try Symbol.Proxy.new(self.allocator, undef.name, .{});
-    //             }
-
-    //             self.unresolved.putAssumeCapacityNoClobber(undef.name, undef);
-    //             continue :loop;
-    //         };
-
-    //         try self.imports.putNoClobber(self.allocator, proxy.name, proxy);
-    //         break :outer proxy;
-    //     };
-    //     undef.alias = proxy;
-    // }
-
-    // // Add LC_LOAD_DYLIB load command for each referenced dylib/stub.
-    // var it = referenced.iterator();
-    // while (it.next()) |entry| {
-    //     const dylib = entry.key_ptr.*;
-    //     dylib.ordinal = self.next_dylib_ordinal;
-    //     const dylib_id = dylib.id orelse unreachable;
-    //     var dylib_cmd = try createLoadDylibCommand(
-    //         self.allocator,
-    //         dylib_id.name,
-    //         dylib_id.timestamp,
-    //         dylib_id.current_version,
-    //         dylib_id.compatibility_version,
-    //     );
-    //     errdefer dylib_cmd.deinit(self.allocator);
-    //     try self.load_commands.append(self.allocator, .{ .Dylib = dylib_cmd });
-    //     self.next_dylib_ordinal += 1;
-    // }
-
-    // if (self.unresolved.count() > 0) {
-    //     for (self.unresolved.values()) |undef| {
-    //         log.err("undefined reference to symbol '{s}'", .{undef.name});
-    //         if (undef.cast(Symbol.Unresolved).?.file) |file| {
-    //             log.err("    | referenced in {s}", .{file.name.?});
-    //         }
-    //     }
-
-    //     return error.UndefinedSymbolReference;
-    // }
 }
 
 fn resolveStubsAndGotEntries(self: *Zld) !void {

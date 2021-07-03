@@ -506,10 +506,3 @@ pub fn parseDependentLibs(self: *Dylib, out: *std.ArrayList(*Dylib)) !void {
         }
     }
 }
-
-pub fn createProxy(self: *Dylib, sym_name: []const u8) !?*Symbol {
-    if (!self.symbols.contains(sym_name)) return null;
-    return Symbol.Proxy.new(self.allocator, sym_name, .{
-        .file = self,
-    });
-}
