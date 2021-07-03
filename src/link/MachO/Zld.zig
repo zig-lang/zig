@@ -102,10 +102,9 @@ objc_selrefs_section_index: ?u16 = null,
 objc_classrefs_section_index: ?u16 = null,
 objc_data_section_index: ?u16 = null,
 
+locals: std.ArrayListUnmanaged(*Symbol) = .{},
 globals: std.StringArrayHashMapUnmanaged(*Symbol) = .{},
 imports: std.StringArrayHashMapUnmanaged(*Symbol) = .{},
-unresolved: std.StringArrayHashMapUnmanaged(*Symbol) = .{},
-tentatives: std.StringArrayHashMapUnmanaged(*Symbol) = .{},
 
 /// Offset into __DATA,__common section.
 /// Set if the linker found tentative definitions in any of the objects.
@@ -173,15 +172,24 @@ pub fn deinit(self: *Zld) void {
     }
     self.dylibs.deinit(self.allocator);
 
-    for (self.imports.values()) |proxy| {
-        proxy.deinit(self.allocator);
-        self.allocator.destroy(proxy);
+    for (self.imports.values()) |sym| {
+        sym.deinit(self.allocator);
+        self.allocator.destroy(sym);
     }
     self.imports.deinit(self.allocator);
 
-    self.tentatives.deinit(self.allocator);
+    for (self.globals.values()) |sym| {
+        sym.deinit(self.allocator);
+        self.allocator.destroy(sym);
+    }
     self.globals.deinit(self.allocator);
-    self.unresolved.deinit(self.allocator);
+
+    for (self.locals.items) |sym| {
+        sym.deinit(self.allocator);
+        self.allocator.destroy(sym);
+    }
+    self.locals.deinit(self.allocator);
+
     self.strtab.deinit();
 }
 
@@ -221,20 +229,21 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     try self.parseInputFiles(files, args.syslibroot);
     try self.parseLibs(args.libs, args.syslibroot);
     try self.resolveSymbols();
-    try self.resolveStubsAndGotEntries();
-    try self.updateMetadata();
-    try self.sortSections();
-    try self.addRpaths(args.rpaths);
-    try self.addDataInCodeLC();
-    try self.addCodeSignatureLC();
-    try self.allocateTextSegment();
-    try self.allocateDataConstSegment();
-    try self.allocateDataSegment();
-    self.allocateLinkeditSegment();
-    try self.allocateSymbols();
-    try self.allocateTentativeSymbols();
-    try self.allocateProxyBindAddresses();
-    try self.flush();
+    return error.TODO;
+    // try self.resolveStubsAndGotEntries();
+    // try self.updateMetadata();
+    // try self.sortSections();
+    // try self.addRpaths(args.rpaths);
+    // try self.addDataInCodeLC();
+    // try self.addCodeSignatureLC();
+    // try self.allocateTextSegment();
+    // try self.allocateDataConstSegment();
+    // try self.allocateDataSegment();
+    // self.allocateLinkeditSegment();
+    // try self.allocateSymbols();
+    // try self.allocateTentativeSymbols();
+    // try self.allocateProxyBindAddresses();
+    // try self.flush();
 }
 
 fn parseInputFiles(self: *Zld, files: []const []const u8, syslibroot: ?[]const u8) !void {
@@ -1458,92 +1467,100 @@ fn writeStubInStubHelper(self: *Zld, index: u32) !void {
 fn resolveSymbolsInObject(self: *Zld, object: *Object) !void {
     log.debug("resolving symbols in '{s}'", .{object.name});
 
-    for (object.symbols.items) |sym| {
-        if (sym.cast(Symbol.Regular)) |reg| {
-            if (reg.linkage == .translation_unit) continue; // Symbol local to TU.
+    for (object.symtab.items) |sym| {
+        const sym_name = object.getString(sym.n_strx);
 
-            if (self.tentatives.fetchSwapRemove(sym.name)) |kv| {
-                // Create link to the global.
-                kv.value.alias = sym;
-            }
-            if (self.unresolved.fetchSwapRemove(sym.name)) |kv| {
-                // Create link to the global.
-                kv.value.alias = sym;
-            }
-            const sym_ptr = self.globals.getPtr(sym.name) orelse {
-                // Put new global symbol into the symbol table.
-                try self.globals.putNoClobber(self.allocator, sym.name, sym);
-                continue;
-            };
-            const g_sym = sym_ptr.*;
-            const g_reg = g_sym.cast(Symbol.Regular) orelse unreachable;
+        if (Symbol.isStab(sym)) {
+            log.err("unhandled symbol type: stab {s}", .{sym_name});
+            log.err("  | first definition in {s}", .{object.name.?});
+            return error.UnhandledSymbolType;
+        }
 
-            switch (g_reg.linkage) {
-                .translation_unit => unreachable,
-                .linkage_unit => {
-                    if (reg.linkage == .linkage_unit) {
-                        // Create link to the first encountered linkage_unit symbol.
-                        sym.alias = g_sym;
-                        continue;
-                    }
+        if (Symbol.isIndr(sym)) {
+            log.err("unhandled symbol type: indirect {s}", .{sym_name});
+            log.err("  | first definition in {s}", .{object.name.?});
+            return error.UnhandledSymbolType;
+        }
+
+        if (Symbol.isAbs(sym)) {
+            log.err("unhandled symbol type: absolute {s}", .{sym_name});
+            log.err("  | first definition in {s}", .{object.name.?});
+            return error.UnhandledSymbolType;
+        }
+
+        if (Symbol.isSect(sym) and !Symbol.isExt(sym)) {
+            // Regular symbol local to translation unit
+            const symbol = try Symbol.new(self.allocator, sym_name);
+            symbol.payload = .{
+                .regular = .{
+                    .linkage = .translation_unit,
+                    .address = sym.n_value,
+                    .section = sym.n_sect - 1,
+                    .weak_ref = Symbol.isWeakRef(sym),
+                    .file = object,
                 },
-                .global => {
-                    if (reg.linkage == .global) {
-                        log.debug("symbol '{s}' defined multiple times", .{reg.base.name});
-                        return error.MultipleSymbolDefinitions;
-                    }
-                    sym.alias = g_sym;
-                    continue;
-                },
-            }
+            };
+            try self.locals.append(self.allocator, symbol);
+            try object.symbols.append(self.allocator, symbol);
+            continue;
+        }
 
-            g_sym.alias = sym;
-            sym_ptr.* = sym;
-        } else if (sym.cast(Symbol.Tentative)) |tent| {
-            if (self.globals.get(sym.name)) |g_sym| {
-                sym.alias = g_sym;
-                continue;
-            }
+        const symbol = self.globals.get(sym_name) orelse symbol: {
+            // Insert new global symbol.
+            const symbol = try Symbol.new(self.allocator, sym_name);
+            symbol.payload.undef.file = object;
+            try self.globals.putNoClobber(self.allocator, symbol.name, symbol);
+            break :symbol symbol;
+        };
 
-            if (self.unresolved.fetchSwapRemove(sym.name)) |kv| {
-                kv.value.alias = sym;
-            }
+        if (Symbol.isSect(sym)) {
+            // Global symbol
+            const linkage: Symbol.Regular.Linkage = if (Symbol.isWeakDef(sym) or Symbol.isPext(sym))
+                .linkage_unit
+            else
+                .global;
 
-            const sym_ptr = self.tentatives.getPtr(sym.name) orelse {
-                // Put new tentative definition symbol into symbol table.
-                try self.tentatives.putNoClobber(self.allocator, sym.name, sym);
-                continue;
+            const should_update = if (symbol.payload == .regular) blk: {
+                if (symbol.payload.regular.linkage == .global and linkage == .global) {
+                    log.err("symbol '{s}' defined multiple times", .{sym_name});
+                    log.err("  | first definition in {s}", .{symbol.payload.regular.file.?.name.?});
+                    log.err("  | next definition in {s}", .{object.name.?});
+                    return error.MultipleSymbolDefinitions;
+                }
+                break :blk symbol.payload.regular.linkage != .global;
+            } else true;
+
+            if (should_update) {
+                symbol.payload = .{
+                    .regular = .{
+                        .linkage = linkage,
+                        .address = sym.n_value,
+                        .section = sym.n_sect - 1,
+                        .weak_ref = Symbol.isWeakRef(sym),
+                        .file = object,
+                    },
+                };
+            }
+        } else if (sym.n_value != 0) {
+            // Tentative definition
+            const should_update = switch (symbol.payload) {
+                .tentative => |tent| tent.size < sym.n_value,
+                .undef => true,
+                else => false,
             };
 
-            // Compare by size and pick the largest tentative definition.
-            // We model this like a heap where the tentative definition with the
-            // largest size always washes up on top.
-            const t_sym = sym_ptr.*;
-            const t_tent = t_sym.cast(Symbol.Tentative) orelse unreachable;
+            if (should_update) {
+                symbol.payload = .{
+                    .tentative = .{
+                        .size = sym.n_value,
+                        .alignment = (sym.n_desc >> 8) & 0x0f,
+                        .file = object,
+                    },
+                };
+            }
+        }
 
-            if (tent.size < t_tent.size) {
-                sym.alias = t_sym;
-                continue;
-            }
-
-            t_sym.alias = sym;
-            sym_ptr.* = sym;
-        } else if (sym.cast(Symbol.Unresolved)) |_| {
-            if (self.globals.get(sym.name)) |g_sym| {
-                sym.alias = g_sym;
-                continue;
-            }
-            if (self.tentatives.get(sym.name)) |t_sym| {
-                sym.alias = t_sym;
-                continue;
-            }
-            if (self.unresolved.get(sym.name)) |u_sym| {
-                sym.alias = u_sym;
-                continue;
-            }
-
-            try self.unresolved.putNoClobber(self.allocator, sym.name, sym);
-        } else unreachable;
+        try object.symbols.append(self.allocator, symbol);
     }
 }
 
@@ -1553,111 +1570,123 @@ fn resolveSymbols(self: *Zld) !void {
         try self.resolveSymbolsInObject(object);
     }
 
-    // Second pass, resolve symbols in static libraries.
-    var next_sym: usize = 0;
-    while (true) {
-        if (next_sym == self.unresolved.count()) break;
+    log.warn("globals", .{});
+    for (self.globals.values()) |value| {
+        log.warn("  | {s}: {}", .{ value.name, value.payload });
+    }
 
-        const sym = self.unresolved.values()[next_sym];
-
-        var reset: bool = false;
-        for (self.archives.items) |archive| {
-            // Check if the entry exists in a static archive.
-            const offsets = archive.toc.get(sym.name) orelse {
-                // No hit.
-                continue;
-            };
-            assert(offsets.items.len > 0);
-
-            const object = try archive.parseObject(offsets.items[0]);
-            try self.objects.append(self.allocator, object);
-            try self.resolveSymbolsInObject(object);
-
-            reset = true;
-            break;
-        }
-
-        if (reset) {
-            next_sym = 0;
-        } else {
-            next_sym += 1;
+    for (self.objects.items) |object| {
+        log.warn("object {s}", .{object.name.?});
+        for (object.symbols.items) |sym| {
+            log.warn("  | {s}: {}", .{ sym.name, sym.payload });
         }
     }
 
-    // Third pass, resolve symbols in dynamic libraries.
-    var unresolved = std.ArrayList(*Symbol).init(self.allocator);
-    defer unresolved.deinit();
+    // // Second pass, resolve symbols in static libraries.
+    // var next_sym: usize = 0;
+    // while (true) {
+    //     if (next_sym == self.unresolved.count()) break;
 
-    try unresolved.ensureCapacity(self.unresolved.count());
-    for (self.unresolved.values()) |value| {
-        unresolved.appendAssumeCapacity(value);
-    }
-    self.unresolved.clearRetainingCapacity();
+    //     const sym = self.unresolved.values()[next_sym];
 
-    // Put dyld_stub_binder as an unresolved special symbol.
-    {
-        const name = try self.allocator.dupe(u8, "dyld_stub_binder");
-        errdefer self.allocator.free(name);
-        const undef = try Symbol.Unresolved.new(self.allocator, name, .{});
-        try unresolved.append(undef);
-    }
+    //     var reset: bool = false;
+    //     for (self.archives.items) |archive| {
+    //         // Check if the entry exists in a static archive.
+    //         const offsets = archive.toc.get(sym.name) orelse {
+    //             // No hit.
+    //             continue;
+    //         };
+    //         assert(offsets.items.len > 0);
 
-    var referenced = std.AutoHashMap(*Dylib, void).init(self.allocator);
-    defer referenced.deinit();
+    //         const object = try archive.parseObject(offsets.items[0]);
+    //         try self.objects.append(self.allocator, object);
+    //         try self.resolveSymbolsInObject(object);
 
-    loop: while (unresolved.popOrNull()) |undef| {
-        const proxy = self.imports.get(undef.name) orelse outer: {
-            const proxy = inner: {
-                for (self.dylibs.items) |dylib| {
-                    const proxy = (try dylib.createProxy(undef.name)) orelse continue;
-                    try referenced.put(dylib, {});
-                    break :inner proxy;
-                }
-                if (mem.eql(u8, undef.name, "___dso_handle")) {
-                    // TODO this is just a temp patch until I work out what to actually
-                    // do with ___dso_handle and __mh_execute_header symbols which are
-                    // synthetically created by the linker on macOS.
-                    break :inner try Symbol.Proxy.new(self.allocator, undef.name, .{});
-                }
+    //         reset = true;
+    //         break;
+    //     }
 
-                self.unresolved.putAssumeCapacityNoClobber(undef.name, undef);
-                continue :loop;
-            };
+    //     if (reset) {
+    //         next_sym = 0;
+    //     } else {
+    //         next_sym += 1;
+    //     }
+    // }
 
-            try self.imports.putNoClobber(self.allocator, proxy.name, proxy);
-            break :outer proxy;
-        };
-        undef.alias = proxy;
-    }
+    // // Third pass, resolve symbols in dynamic libraries.
+    // var unresolved = std.ArrayList(*Symbol).init(self.allocator);
+    // defer unresolved.deinit();
 
-    // Add LC_LOAD_DYLIB load command for each referenced dylib/stub.
-    var it = referenced.iterator();
-    while (it.next()) |entry| {
-        const dylib = entry.key_ptr.*;
-        dylib.ordinal = self.next_dylib_ordinal;
-        const dylib_id = dylib.id orelse unreachable;
-        var dylib_cmd = try createLoadDylibCommand(
-            self.allocator,
-            dylib_id.name,
-            dylib_id.timestamp,
-            dylib_id.current_version,
-            dylib_id.compatibility_version,
-        );
-        errdefer dylib_cmd.deinit(self.allocator);
-        try self.load_commands.append(self.allocator, .{ .Dylib = dylib_cmd });
-        self.next_dylib_ordinal += 1;
-    }
+    // try unresolved.ensureCapacity(self.unresolved.count());
+    // for (self.unresolved.values()) |value| {
+    //     unresolved.appendAssumeCapacity(value);
+    // }
+    // self.unresolved.clearRetainingCapacity();
 
-    if (self.unresolved.count() > 0) {
-        for (self.unresolved.values()) |undef| {
-            log.err("undefined reference to symbol '{s}'", .{undef.name});
-            if (undef.cast(Symbol.Unresolved).?.file) |file| {
-                log.err("    | referenced in {s}", .{file.name.?});
-            }
-        }
+    // // Put dyld_stub_binder as an unresolved special symbol.
+    // {
+    //     const name = try self.allocator.dupe(u8, "dyld_stub_binder");
+    //     errdefer self.allocator.free(name);
+    //     const undef = try Symbol.Unresolved.new(self.allocator, name, .{});
+    //     try unresolved.append(undef);
+    // }
 
-        return error.UndefinedSymbolReference;
-    }
+    // var referenced = std.AutoHashMap(*Dylib, void).init(self.allocator);
+    // defer referenced.deinit();
+
+    // loop: while (unresolved.popOrNull()) |undef| {
+    //     const proxy = self.imports.get(undef.name) orelse outer: {
+    //         const proxy = inner: {
+    //             for (self.dylibs.items) |dylib| {
+    //                 const proxy = (try dylib.createProxy(undef.name)) orelse continue;
+    //                 try referenced.put(dylib, {});
+    //                 break :inner proxy;
+    //             }
+    //             if (mem.eql(u8, undef.name, "___dso_handle")) {
+    //                 // TODO this is just a temp patch until I work out what to actually
+    //                 // do with ___dso_handle and __mh_execute_header symbols which are
+    //                 // synthetically created by the linker on macOS.
+    //                 break :inner try Symbol.Proxy.new(self.allocator, undef.name, .{});
+    //             }
+
+    //             self.unresolved.putAssumeCapacityNoClobber(undef.name, undef);
+    //             continue :loop;
+    //         };
+
+    //         try self.imports.putNoClobber(self.allocator, proxy.name, proxy);
+    //         break :outer proxy;
+    //     };
+    //     undef.alias = proxy;
+    // }
+
+    // // Add LC_LOAD_DYLIB load command for each referenced dylib/stub.
+    // var it = referenced.iterator();
+    // while (it.next()) |entry| {
+    //     const dylib = entry.key_ptr.*;
+    //     dylib.ordinal = self.next_dylib_ordinal;
+    //     const dylib_id = dylib.id orelse unreachable;
+    //     var dylib_cmd = try createLoadDylibCommand(
+    //         self.allocator,
+    //         dylib_id.name,
+    //         dylib_id.timestamp,
+    //         dylib_id.current_version,
+    //         dylib_id.compatibility_version,
+    //     );
+    //     errdefer dylib_cmd.deinit(self.allocator);
+    //     try self.load_commands.append(self.allocator, .{ .Dylib = dylib_cmd });
+    //     self.next_dylib_ordinal += 1;
+    // }
+
+    // if (self.unresolved.count() > 0) {
+    //     for (self.unresolved.values()) |undef| {
+    //         log.err("undefined reference to symbol '{s}'", .{undef.name});
+    //         if (undef.cast(Symbol.Unresolved).?.file) |file| {
+    //             log.err("    | referenced in {s}", .{file.name.?});
+    //         }
+    //     }
+
+    //     return error.UndefinedSymbolReference;
+    // }
 }
 
 fn resolveStubsAndGotEntries(self: *Zld) !void {

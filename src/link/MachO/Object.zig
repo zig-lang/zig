@@ -45,9 +45,12 @@ dwarf_debug_str_index: ?u16 = null,
 dwarf_debug_line_index: ?u16 = null,
 dwarf_debug_ranges_index: ?u16 = null,
 
+symtab: std.ArrayListUnmanaged(macho.nlist_64) = .{},
+strtab: std.ArrayListUnmanaged(u8) = .{},
+
 symbols: std.ArrayListUnmanaged(*Symbol) = .{},
 stabs: std.ArrayListUnmanaged(*Symbol) = .{},
-initializers: std.ArrayListUnmanaged(*Symbol) = .{},
+initializers: std.ArrayListUnmanaged(u32) = .{},
 data_in_code_entries: std.ArrayListUnmanaged(macho.data_in_code_entry) = .{},
 
 pub const Section = struct {
@@ -216,20 +219,13 @@ pub fn deinit(self: *Object) void {
     }
     self.sections.deinit(self.allocator);
 
-    for (self.symbols.items) |sym| {
-        sym.deinit(self.allocator);
-        self.allocator.destroy(sym);
-    }
     self.symbols.deinit(self.allocator);
-
-    for (self.stabs.items) |stab| {
-        stab.deinit(self.allocator);
-        self.allocator.destroy(stab);
-    }
     self.stabs.deinit(self.allocator);
 
     self.data_in_code_entries.deinit(self.allocator);
     self.initializers.deinit(self.allocator);
+    self.symtab.deinit(self.allocator);
+    self.strtab.deinit(self.allocator);
 
     if (self.name) |n| {
         self.allocator.free(n);
@@ -271,11 +267,10 @@ pub fn parse(self: *Object) !void {
     self.header = header;
 
     try self.readLoadCommands(reader);
-    try self.parseSymbols();
     try self.parseSections();
+    try self.parseSymtab();
     try self.parseDataInCode();
     try self.parseInitializers();
-    try self.parseDebugInfo();
 }
 
 pub fn readLoadCommands(self: *Object, reader: anytype) !void {
@@ -394,14 +389,13 @@ pub fn parseInitializers(self: *Object) !void {
     const relocs = section.relocs orelse unreachable;
     try self.initializers.ensureCapacity(self.allocator, relocs.len);
     for (relocs) |rel| {
-        const sym = self.symbols.items[rel.target.symbol];
-        self.initializers.appendAssumeCapacity(sym);
+        self.initializers.appendAssumeCapacity(rel.target.symbol);
     }
 
-    mem.reverse(*Symbol, self.initializers.items);
+    mem.reverse(u32, self.initializers.items);
 }
 
-pub fn parseSymbols(self: *Object) !void {
+fn parseSymtab(self: *Object) !void {
     const index = self.symtab_cmd_index orelse return;
     const symtab_cmd = self.load_commands.items[index].Symtab;
 
@@ -409,59 +403,12 @@ pub fn parseSymbols(self: *Object) !void {
     defer self.allocator.free(symtab);
     _ = try self.file.?.preadAll(symtab, symtab_cmd.symoff);
     const slice = @alignCast(@alignOf(macho.nlist_64), mem.bytesAsSlice(macho.nlist_64, symtab));
+    try self.symtab.appendSlice(self.allocator, slice);
 
     var strtab = try self.allocator.alloc(u8, symtab_cmd.strsize);
     defer self.allocator.free(strtab);
     _ = try self.file.?.preadAll(strtab, symtab_cmd.stroff);
-
-    for (slice) |sym| {
-        const sym_name = mem.spanZ(@ptrCast([*:0]const u8, strtab.ptr + sym.n_strx));
-
-        if (Symbol.isStab(sym)) {
-            log.err("unhandled symbol type: stab {s} in {s}", .{ sym_name, self.name.? });
-            return error.UnhandledSymbolType;
-        }
-        if (Symbol.isIndr(sym)) {
-            log.err("unhandled symbol type: indirect {s} in {s}", .{ sym_name, self.name.? });
-            return error.UnhandledSymbolType;
-        }
-        if (Symbol.isAbs(sym)) {
-            log.err("unhandled symbol type: absolute {s} in {s}", .{ sym_name, self.name.? });
-            return error.UnhandledSymbolType;
-        }
-
-        const name = try self.allocator.dupe(u8, sym_name);
-        const symbol: *Symbol = symbol: {
-            if (Symbol.isSect(sym)) {
-                const linkage: Symbol.Regular.Linkage = linkage: {
-                    if (!Symbol.isExt(sym)) break :linkage .translation_unit;
-                    if (Symbol.isWeakDef(sym) or Symbol.isPext(sym)) break :linkage .linkage_unit;
-                    break :linkage .global;
-                };
-                break :symbol try Symbol.Regular.new(self.allocator, name, .{
-                    .linkage = linkage,
-                    .address = sym.n_value,
-                    .section = sym.n_sect - 1,
-                    .weak_ref = Symbol.isWeakRef(sym),
-                    .file = self,
-                });
-            }
-
-            if (sym.n_value != 0) {
-                break :symbol try Symbol.Tentative.new(self.allocator, name, .{
-                    .size = sym.n_value,
-                    .alignment = (sym.n_desc >> 8) & 0x0f,
-                    .file = self,
-                });
-            }
-
-            break :symbol try Symbol.Unresolved.new(self.allocator, name, .{
-                .file = self,
-            });
-        };
-
-        try self.symbols.append(self.allocator, symbol);
-    }
+    try self.strtab.appendSlice(self.allocator, strtab);
 }
 
 pub fn parseDebugInfo(self: *Object) !void {
@@ -555,14 +502,6 @@ pub fn parseDebugInfo(self: *Object) !void {
     self.stabs.appendAssumeCapacity(delim_stab);
 }
 
-fn readSection(self: Object, allocator: *Allocator, index: u16) ![]u8 {
-    const seg = self.load_commands.items[self.segment_cmd_index.?].Segment;
-    const sect = seg.sections.items[index];
-    var buffer = try allocator.alloc(u8, @intCast(usize, sect.size));
-    _ = try self.file.?.preadAll(buffer, sect.offset);
-    return buffer;
-}
-
 pub fn parseDataInCode(self: *Object) !void {
     const index = self.data_in_code_cmd_index orelse return;
     const data_in_code = self.load_commands.items[index].LinkeditData;
@@ -581,4 +520,17 @@ pub fn parseDataInCode(self: *Object) !void {
         };
         try self.data_in_code_entries.append(self.allocator, dice);
     }
+}
+
+fn readSection(self: Object, allocator: *Allocator, index: u16) ![]u8 {
+    const seg = self.load_commands.items[self.segment_cmd_index.?].Segment;
+    const sect = seg.sections.items[index];
+    var buffer = try allocator.alloc(u8, @intCast(usize, sect.size));
+    _ = try self.file.?.preadAll(buffer, sect.offset);
+    return buffer;
+}
+
+pub fn getString(self: Object, off: u32) []const u8 {
+    assert(off < self.strtab.items.len);
+    return mem.spanZ(@ptrCast([*:0]const u8, self.strtab.items.ptr + off));
 }
