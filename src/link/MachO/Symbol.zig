@@ -59,6 +59,8 @@ pub const Regular = struct {
     };
 
     pub fn format(self: Regular, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
         try std.fmt.format(writer, "Regular {{ ", .{});
         try std.fmt.format(writer, ".linkage = {s},  ", .{self.linkage});
         try std.fmt.format(writer, ".address = 0x{x}, ", .{self.address});
@@ -84,6 +86,8 @@ pub const Tentative = struct {
     file: ?*Object = null,
 
     pub fn format(self: Tentative, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
         try std.fmt.format(writer, "Tentative {{ ", .{});
         try std.fmt.format(writer, ".size = 0x{x},  ", .{self.size});
         try std.fmt.format(writer, ".alignment = 0x{x}, ", .{self.alignment});
@@ -116,6 +120,8 @@ pub const Proxy = struct {
     }
 
     pub fn format(self: Proxy, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
         try std.fmt.format(writer, "Proxy {{ ", .{});
         if (self.bind_info.items.len > 0) {
             // TODO
@@ -134,6 +140,8 @@ pub const Undefined = struct {
     file: ?*Object = null,
 
     pub fn format(self: Undefined, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
         try std.fmt.format(writer, "Undefined {{ ", .{});
         if (self.file) |file| {
             try std.fmt.format(writer, ".file = {s}, ", .{file.name.?});
@@ -192,7 +200,7 @@ pub fn asNlist(symbol: *Symbol, strtab: *StringTable) !macho.nlist_64 {
 
                 break :nlist nlist;
             },
-            .tentative => |tentative| {
+            .tentative => {
                 // TODO
                 break :nlist macho.nlist_64{
                     .n_strx = n_strx,
@@ -211,7 +219,7 @@ pub fn asNlist(symbol: *Symbol, strtab: *StringTable) !macho.nlist_64 {
                     .n_value = 0,
                 };
             },
-            .undef => |undef| {
+            .undef => {
                 // TODO
                 break :nlist macho.nlist_64{
                     .n_strx = n_strx,
