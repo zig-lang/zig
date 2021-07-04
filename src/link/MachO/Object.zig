@@ -9,13 +9,13 @@ const log = std.log.scoped(.object);
 const macho = std.macho;
 const mem = std.mem;
 const reloc = @import("reloc.zig");
-const parseName = @import("Zld.zig").parseName;
 
 const Allocator = mem.Allocator;
 const Arch = std.Target.Cpu.Arch;
 const Relocation = reloc.Relocation;
 const Symbol = @import("Symbol.zig");
-const TextBlock = @import("Zld.zig").TextBlock;
+const TextBlock = Zld.TextBlock;
+const Zld = @import("Zld.zig");
 
 usingnamespace @import("commands.zig");
 
@@ -73,43 +73,6 @@ pub const Section = struct {
             }
             allocator.free(relocs);
         }
-    }
-
-    pub fn segname(self: Section) []const u8 {
-        return parseName(&self.inner.segname);
-    }
-
-    pub fn sectname(self: Section) []const u8 {
-        return parseName(&self.inner.sectname);
-    }
-
-    pub fn flags(self: Section) u32 {
-        return self.inner.flags;
-    }
-
-    pub fn sectionType(self: Section) u8 {
-        return @truncate(u8, self.flags() & 0xff);
-    }
-
-    pub fn sectionAttrs(self: Section) u32 {
-        return self.flags() & 0xffffff00;
-    }
-
-    pub fn isCode(self: Section) bool {
-        const attr = self.sectionAttrs();
-        return attr & macho.S_ATTR_PURE_INSTRUCTIONS != 0 or attr & macho.S_ATTR_SOME_INSTRUCTIONS != 0;
-    }
-
-    pub fn isDebug(self: Section) bool {
-        return self.sectionAttrs() & macho.S_ATTR_DEBUG != 0;
-    }
-
-    pub fn dontDeadStrip(self: Section) bool {
-        return self.sectionAttrs() & macho.S_ATTR_NO_DEAD_STRIP != 0;
-    }
-
-    pub fn dontDeadStripIfReferencesLive(self: Section) bool {
-        return self.sectionAttrs() & macho.S_ATTR_LIVE_SUPPORT != 0;
     }
 };
 
@@ -272,7 +235,6 @@ pub fn parse(self: *Object) !void {
     try self.parseSymtab();
     try self.parseDataInCode();
     try self.parseInitializers();
-    try self.parseDummy();
 }
 
 pub fn readLoadCommands(self: *Object, reader: anytype) !void {
@@ -288,8 +250,8 @@ pub fn readLoadCommands(self: *Object, reader: anytype) !void {
                 var seg = cmd.Segment;
                 for (seg.sections.items) |*sect, j| {
                     const index = @intCast(u16, j);
-                    const segname = parseName(&sect.segname);
-                    const sectname = parseName(&sect.sectname);
+                    const segname = segmentName(sect.*);
+                    const sectname = sectionName(sect.*);
                     if (mem.eql(u8, segname, "__DWARF")) {
                         if (mem.eql(u8, sectname, "__debug_info")) {
                             self.dwarf_debug_info_index = index;
@@ -351,7 +313,7 @@ pub fn parseSections(self: *Object) !void {
     try self.sections.ensureCapacity(self.allocator, seg.sections.items.len);
 
     for (seg.sections.items) |sect| {
-        log.debug("parsing section '{s},{s}'", .{ parseName(&sect.segname), parseName(&sect.sectname) });
+        log.debug("parsing section '{s},{s}'", .{ segmentName(sect), sectionName(sect) });
         // Read sections' code
         var code = try self.allocator.alloc(u8, @intCast(usize, sect.size));
         _ = try self.file.?.preadAll(code, sect.offset);
@@ -381,47 +343,91 @@ pub fn parseSections(self: *Object) !void {
     }
 }
 
-fn cmpNlist(_: void, lhs: macho.nlist_64, rhs: macho.nlist_64) bool {
-    return lhs.n_value < rhs.n_value;
-}
-
-fn filterSymsInSection(symbols: []macho.nlist_64, sect_id: u8) []macho.nlist_64 {
-    var start: usize = 0;
-    var end: usize = symbols.len;
-
-    while (true) {
-        var change = false;
-        if (symbols[start].n_sect != sect_id) {
-            start += 1;
-            change = true;
-        }
-        if (symbols[end - 1].n_sect != sect_id) {
-            end -= 1;
-            change = true;
-        }
-
-        if (start == end) break;
-        if (!change) break;
-    }
-
-    return symbols[start..end];
-}
-
-pub fn parseDummy(self: *Object) !void {
+pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
     const seg = self.load_commands.items[self.segment_cmd_index.?].Segment;
 
     log.warn("analysing {s}", .{self.name.?});
 
     const dysymtab = self.load_commands.items[self.dysymtab_cmd_index.?].Dysymtab;
 
-    var sorted_syms = std.ArrayList(macho.nlist_64).init(self.allocator);
-    defer sorted_syms.deinit();
-    try sorted_syms.appendSlice(self.symtab.items[dysymtab.ilocalsym..dysymtab.iundefsym]);
+    const SymWithIndex = struct {
+        nlist: macho.nlist_64,
+        index: u32,
 
-    std.sort.sort(macho.nlist_64, sorted_syms.items, {}, cmpNlist);
+        pub fn cmp(_: void, lhs: @This(), rhs: @This()) bool {
+            return lhs.nlist.n_value < rhs.nlist.n_value;
+        }
+
+        fn filterSymsInSection(symbols: []@This(), sect_id: u8) []@This() {
+            var start: usize = 0;
+            var end: usize = symbols.len;
+
+            while (true) {
+                var change = false;
+                if (symbols[start].nlist.n_sect != sect_id) {
+                    start += 1;
+                    change = true;
+                }
+                if (symbols[end - 1].nlist.n_sect != sect_id) {
+                    end -= 1;
+                    change = true;
+                }
+
+                if (start == end) break;
+                if (!change) break;
+            }
+
+            return symbols[start..end];
+        }
+
+        fn filterRelocs(relocs: []macho.relocation_info, start: u64, end: u64) []macho.relocation_info {
+            if (relocs.len == 0) return relocs;
+
+            var start_id: usize = 0;
+            var end_id: usize = relocs.len;
+
+            while (true) {
+                var change = false;
+                if (relocs[start_id].r_address > end) {
+                    start_id += 1;
+                    change = true;
+                }
+                if (relocs[end_id - 1].r_address < start) {
+                    end_id -= 1;
+                    change = true;
+                }
+
+                if (start_id == end_id) break;
+                if (!change) break;
+            }
+
+            return relocs[start_id..end_id];
+        }
+    };
+
+    const nlists = self.symtab.items[dysymtab.ilocalsym..dysymtab.iundefsym];
+
+    var sorted_syms = std.ArrayList(SymWithIndex).init(self.allocator);
+    defer sorted_syms.deinit();
+    try sorted_syms.ensureTotalCapacity(nlists.len);
+
+    for (nlists) |nlist, index| {
+        sorted_syms.appendAssumeCapacity(.{
+            .nlist = nlist,
+            .index = @intCast(u32, index + dysymtab.ilocalsym),
+        });
+    }
+
+    std.sort.sort(SymWithIndex, sorted_syms.items, {}, SymWithIndex.cmp);
 
     for (seg.sections.items) |sect, sect_id| {
-        log.warn("section {s},{s}", .{ parseName(&sect.segname), parseName(&sect.sectname) });
+        log.warn("section {s},{s}", .{ segmentName(sect), sectionName(sect) });
+
+        const match = (try zld.getMatchingSection(sect)) orelse {
+            log.warn("unhandled section", .{});
+            continue;
+        };
+
         // Read code
         var code = try self.allocator.alloc(u8, @intCast(usize, sect.size));
         defer self.allocator.free(code);
@@ -431,16 +437,25 @@ pub fn parseDummy(self: *Object) !void {
         const raw_relocs = try self.allocator.alloc(u8, @sizeOf(macho.relocation_info) * sect.nreloc);
         defer self.allocator.free(raw_relocs);
         _ = try self.file.?.preadAll(raw_relocs, sect.reloff);
+        const relocs = mem.bytesAsSlice(macho.relocation_info, raw_relocs);
 
-        const relocs = try reloc.parse(
-            self.allocator,
-            self.arch.?,
-            code,
-            mem.bytesAsSlice(macho.relocation_info, raw_relocs),
-        );
+        const alignment = sect.@"align";
 
         if (self.header.?.flags & macho.MH_SUBSECTIONS_VIA_SYMBOLS != 0) {
-            const syms = filterSymsInSection(sorted_syms.items, @intCast(u8, sect_id + 1));
+            const syms = SymWithIndex.filterSymsInSection(sorted_syms.items, @intCast(u8, sect_id + 1));
+
+            if (syms.len == 0) {
+                // One large text block referenced by section offsets only
+                log.warn("TextBlock", .{});
+                log.warn("  | referenced by section offsets", .{});
+                log.warn("  | start_addr = {}", .{sect.addr});
+                log.warn("  | end_addr = {}", .{sect.size});
+                log.warn("  | size = {}", .{sect.size});
+                log.warn("  | alignment = 0x{x}", .{alignment});
+                log.warn("  | segment_id = {}", .{match.seg});
+                log.warn("  | section_id = {}", .{match.sect});
+                log.warn("  | relocs: {any}", .{relocs});
+            }
 
             var indices = std.ArrayList(u32).init(self.allocator);
             defer indices.deinit();
@@ -450,32 +465,35 @@ pub fn parseDummy(self: *Object) !void {
                 const curr = syms[i];
                 try indices.append(i);
 
-                const next: ?macho.nlist_64 = if (i + 1 < syms.len)
+                const next: ?SymWithIndex = if (i + 1 < syms.len)
                     syms[i + 1]
                 else
                     null;
 
                 if (next) |n| {
-                    if (curr.n_value == n.n_value) {
+                    if (curr.nlist.n_value == n.nlist.n_value) {
                         continue;
                     }
                 }
 
-                const start_addr = curr.n_value - sect.addr;
-                const end_addr = if (next) |n| n.n_value - sect.addr else sect.size;
-                const alignment = sect.@"align";
+                const start_addr = curr.nlist.n_value - sect.addr;
+                const end_addr = if (next) |n| n.nlist.n_value - sect.addr else sect.size;
 
                 const tb_code = code[start_addr..end_addr];
                 const size = tb_code.len;
 
                 log.warn("TextBlock", .{});
                 for (indices.items) |id| {
-                    log.warn("  | symbol {s}", .{self.getString(syms[id].n_strx)});
+                    const sym = self.symbols.items[syms[id].index];
+                    log.warn("  | symbol = {s}", .{sym.name});
                 }
-                log.warn("  | start_addr = 0x{x}", .{start_addr});
-                log.warn("  | end_addr = 0x{x}", .{end_addr});
+                log.warn("  | start_addr = {}", .{start_addr});
+                log.warn("  | end_addr = {}", .{end_addr});
                 log.warn("  | size = {}", .{size});
                 log.warn("  | alignment = 0x{x}", .{alignment});
+                log.warn("  | segment_id = {}", .{match.seg});
+                log.warn("  | section_id = {}", .{match.sect});
+                log.warn("  | relocs: {any}", .{SymWithIndex.filterRelocs(relocs, start_addr, end_addr)});
 
                 indices.clearRetainingCapacity();
             }

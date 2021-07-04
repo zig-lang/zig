@@ -425,6 +425,44 @@ fn makeStaticString(bytes: []const u8) [16]u8 {
     return buf;
 }
 
+fn parseName(name: *const [16]u8) []const u8 {
+    const len = mem.indexOfScalar(u8, name, @as(u8, 0)) orelse name.len;
+    return name[0..len];
+}
+
+pub fn segmentName(sect: macho.section_64) []const u8 {
+    return parseName(&sect.segname);
+}
+
+pub fn sectionName(sect: macho.section_64) []const u8 {
+    return parseName(&sect.sectname);
+}
+
+pub fn sectionType(sect: macho.section_64) u8 {
+    return @truncate(u8, sect.flags & 0xff);
+}
+
+pub fn sectionAttrs(sect: macho.section_64) u32 {
+    return sect.flags & 0xffffff00;
+}
+
+pub fn sectionIsCode(sect: macho.section_64) bool {
+    const attr = sectionAttrs(sect);
+    return attr & macho.S_ATTR_PURE_INSTRUCTIONS != 0 or attr & macho.S_ATTR_SOME_INSTRUCTIONS != 0;
+}
+
+pub fn sectionIsDebug(sect: macho.section_64) bool {
+    return sectionAttrs(sect) & macho.S_ATTR_DEBUG != 0;
+}
+
+pub fn sectionIsDontDeadStrip(sect: macho.section_64) bool {
+    return sectionAttrs(sect) & macho.S_ATTR_NO_DEAD_STRIP != 0;
+}
+
+pub fn sectionIsDontDeadStripIfReferencesLive(sect: macho.section_64) bool {
+    return sectionAttrs(sect) & macho.S_ATTR_LIVE_SUPPORT != 0;
+}
+
 fn testRead(allocator: *Allocator, buffer: []const u8, expected: anytype) !void {
     var stream = io.fixedBufferStream(buffer);
     var given = try LoadCommand.read(allocator, stream.reader());

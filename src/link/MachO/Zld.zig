@@ -234,6 +234,7 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     try self.parseInputFiles(files, args.syslibroot);
     try self.parseLibs(args.libs, args.syslibroot);
     try self.resolveSymbols();
+    try self.parseTextBlocks();
     try self.resolveStubsAndGotEntries();
     try self.updateMetadata();
     try self.sortSections();
@@ -322,10 +323,10 @@ fn mapAndUpdateSections(
 
     log.debug("{s}: '{s},{s}' mapped to '{s},{s}' from 0x{x} to 0x{x}", .{
         object.name.?,
-        parseName(&source_sect.inner.segname),
-        parseName(&source_sect.inner.sectname),
-        parseName(&target_sect.segname),
-        parseName(&target_sect.sectname),
+        segmentName(source_sect.inner),
+        sectionName(source_sect.inner),
+        segmentName(target_sect.*),
+        sectionName(target_sect.*),
         offset,
         offset + size,
     });
@@ -343,12 +344,12 @@ fn updateMetadata(self: *Zld) !void {
     for (self.objects.items) |object| {
         // Find ideal section alignment and update section mappings
         for (object.sections.items) |sect, sect_id| {
-            const match = (try self.getMatchingSection(sect)) orelse {
+            const match = (try self.getMatchingSection(sect.inner)) orelse {
                 log.debug("{s}: unhandled section type 0x{x} for '{s},{s}'", .{
                     object.name.?,
-                    sect.flags(),
-                    sect.segname(),
-                    sect.sectname(),
+                    sect.inner.flags,
+                    segmentName(sect.inner),
+                    sectionName(sect.inner),
                 });
                 continue;
             };
@@ -441,15 +442,15 @@ const MatchingSection = struct {
     sect: u16,
 };
 
-fn getMatchingSection(self: *Zld, sect: Object.Section) !?MatchingSection {
+pub fn getMatchingSection(self: *Zld, sect: macho.section_64) !?MatchingSection {
     const text_seg = &self.load_commands.items[self.text_segment_cmd_index.?].Segment;
     const data_const_seg = &self.load_commands.items[self.data_const_segment_cmd_index.?].Segment;
     const data_seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-    const segname = sect.segname();
-    const sectname = sect.sectname();
+    const segname = segmentName(sect);
+    const sectname = sectionName(sect);
 
     const res: ?MatchingSection = blk: {
-        switch (sect.sectionType()) {
+        switch (sectionType(sect)) {
             macho.S_4BYTE_LITERALS, macho.S_8BYTE_LITERALS, macho.S_16BYTE_LITERALS => {
                 if (self.text_const_section_index == null) {
                     self.text_const_section_index = @intCast(u16, text_seg.sections.items.len);
@@ -649,7 +650,7 @@ fn getMatchingSection(self: *Zld, sect: Object.Section) !?MatchingSection {
                 };
             },
             macho.S_REGULAR => {
-                if (sect.isCode()) {
+                if (sectionIsCode(sect)) {
                     if (self.text_section_index == null) {
                         self.text_section_index = @intCast(u16, text_seg.sections.items.len);
                         try text_seg.addSection(self.allocator, "__text", .{
@@ -662,11 +663,11 @@ fn getMatchingSection(self: *Zld, sect: Object.Section) !?MatchingSection {
                         .sect = self.text_section_index.?,
                     };
                 }
-                if (sect.isDebug()) {
+                if (sectionIsDebug(sect)) {
                     // TODO debug attributes
                     if (mem.eql(u8, "__LD", segname) and mem.eql(u8, "__compact_unwind", sectname)) {
                         log.debug("TODO compact unwind section: type 0x{x}, name '{s},{s}'", .{
-                            sect.flags(), segname, sectname,
+                            sect.flags, segname, sectname,
                         });
                     }
                     break :blk null;
@@ -829,7 +830,7 @@ fn getMatchingSection(self: *Zld, sect: Object.Section) !?MatchingSection {
 
                 if (mem.eql(u8, "__LLVM", segname) and mem.eql(u8, "__asm", sectname)) {
                     log.debug("TODO LLVM asm section: type 0x{x}, name '{s},{s}'", .{
-                        sect.flags(), segname, sectname,
+                        sect.flags, segname, sectname,
                     });
                 }
 
@@ -956,8 +957,8 @@ fn sortSections(self: *Zld) !void {
 
             log.debug("remapping in {s}: '{s},{s}': {} => {}", .{
                 object.name.?,
-                parseName(&sect.inner.segname),
-                parseName(&sect.inner.sectname),
+                segmentName(sect.inner),
+                sectionName(sect.inner),
                 target_map.section_id,
                 new_index,
             });
@@ -1086,8 +1087,8 @@ fn allocateSymbol(self: *Zld, symbol: *Symbol) !void {
     const source_sect = &object.sections.items[reg.section];
     const target_map = source_sect.target_map orelse {
         log.debug("section '{s},{s}' not mapped for symbol '{s}'", .{
-            parseName(&source_sect.inner.segname),
-            parseName(&source_sect.inner.sectname),
+            segmentName(source_sect.inner),
+            sectionName(source_sect.inner),
             symbol.name,
         });
         return;
@@ -1464,7 +1465,7 @@ fn writeStubInStubHelper(self: *Zld, index: u32) !void {
 fn resolveSymbolsInObject(self: *Zld, object: *Object) !void {
     log.debug("resolving symbols in '{s}'", .{object.name});
 
-    for (object.symtab.items) |sym| {
+    for (object.symtab.items) |sym, sym_id| {
         const sym_name = object.getString(sym.n_strx);
 
         if (Symbol.isStab(sym)) {
@@ -1497,6 +1498,7 @@ fn resolveSymbolsInObject(self: *Zld, object: *Object) !void {
                     .file = object,
                 },
             };
+            const index = @intCast(u32, self.locals.items.len);
             try self.locals.append(self.allocator, symbol);
             try object.symbols.append(self.allocator, symbol);
             continue;
@@ -1665,6 +1667,12 @@ fn resolveSymbols(self: *Zld) !void {
     if (has_undefined) return error.UndefinedSymbolReference;
 }
 
+fn parseTextBlocks(self: *Zld) !void {
+    for (self.objects.items) |object| {
+        try object.parseTextBlocks(self);
+    }
+}
+
 fn resolveStubsAndGotEntries(self: *Zld) !void {
     for (self.objects.items) |object| {
         log.debug("resolving stubs and got entries from {s}", .{object.name});
@@ -1718,11 +1726,11 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
         log.debug("relocating object {s}", .{object.name});
 
         for (object.sections.items) |sect| {
-            if (sect.inner.flags == macho.S_MOD_INIT_FUNC_POINTERS or
-                sect.inner.flags == macho.S_MOD_TERM_FUNC_POINTERS) continue;
+            if (sectionType(sect.inner) == macho.S_MOD_INIT_FUNC_POINTERS or
+                sectionType(sect.inner) == macho.S_MOD_TERM_FUNC_POINTERS) continue;
 
-            const segname = parseName(&sect.inner.segname);
-            const sectname = parseName(&sect.inner.sectname);
+            const segname = segmentName(sect.inner);
+            const sectname = sectionName(sect.inner);
 
             log.debug("relocating section '{s},{s}'", .{ segname, sectname });
 
@@ -1759,7 +1767,7 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
                                 args.source_target_sect_addr = source_sect.inner.addr;
                             }
 
-                            const flags = @truncate(u8, target_sect.flags & 0xff);
+                            const sect_type = sectionType(target_sect);
                             const should_rebase = rebase: {
                                 if (!unsigned.is_64bit) break :rebase false;
 
@@ -1780,8 +1788,8 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
                                 };
 
                                 if (!is_right_segment) break :rebase false;
-                                if (flags != macho.S_LITERAL_POINTERS and
-                                    flags != macho.S_REGULAR)
+                                if (sect_type != macho.S_LITERAL_POINTERS and
+                                    sect_type != macho.S_REGULAR)
                                 {
                                     break :rebase false;
                                 }
@@ -1804,7 +1812,7 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
 
                             // TLV is handled via a separate offset mechanism.
                             // Calculate the offset to the initializer.
-                            if (flags == macho.S_THREAD_LOCAL_VARIABLES) tlv: {
+                            if (sect_type == macho.S_THREAD_LOCAL_VARIABLES) tlv: {
                                 // TODO we don't want to save offset to tlv_bootstrap
                                 if (mem.eql(u8, object.symbols.items[rel.target.symbol].name, "__tlv_bootstrap")) break :tlv;
 
@@ -1858,13 +1866,13 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
                 target_sect_off + sect.code.len,
             });
 
-            if (target_sect.flags == macho.S_ZEROFILL or
-                target_sect.flags == macho.S_THREAD_LOCAL_ZEROFILL or
-                target_sect.flags == macho.S_THREAD_LOCAL_VARIABLES)
+            if (sectionType(target_sect) == macho.S_ZEROFILL or
+                sectionType(target_sect) == macho.S_THREAD_LOCAL_ZEROFILL or
+                sectionType(target_sect) == macho.S_THREAD_LOCAL_VARIABLES)
             {
                 log.debug("zeroing out '{s},{s}' from 0x{x} to 0x{x}", .{
-                    parseName(&target_sect.segname),
-                    parseName(&target_sect.sectname),
+                    segmentName(target_sect),
+                    sectionName(target_sect),
                     target_sect_off,
                     target_sect_off + sect.code.len,
                 });
@@ -1926,8 +1934,8 @@ fn relocTargetAddr(self: *Zld, object: *const Object, target: reloc.Relocation.T
                 log.debug("    | section offset", .{});
                 const source_sect = object.sections.items[sect_id];
                 log.debug("    | section '{s},{s}'", .{
-                    parseName(&source_sect.inner.segname),
-                    parseName(&source_sect.inner.sectname),
+                    segmentName(source_sect.inner),
+                    sectionName(source_sect.inner),
                 });
                 const target_map = source_sect.target_map orelse unreachable;
                 const target_seg = self.load_commands.items[target_map.segment_id].Segment;
@@ -2998,9 +3006,4 @@ fn writeHeader(self: *Zld) !void {
     log.debug("writing Mach-O header {}", .{header});
 
     try self.file.?.pwriteAll(mem.asBytes(&header), 0);
-}
-
-pub fn parseName(name: *const [16]u8) []const u8 {
-    const len = mem.indexOfScalar(u8, name, @as(u8, 0)) orelse name.len;
-    return name[0..len];
 }
