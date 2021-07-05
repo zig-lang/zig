@@ -1532,7 +1532,11 @@ test "skipValue" {
     }
 }
 
-fn ParseInternalError(comptime T: type) type {
+fn ParseInternalError(comptime T: type, inferred_types: []const type) type {
+    for (inferred_types) |ty| {
+        if (T == ty) return error{};
+    }
+
     switch (@typeInfo(T)) {
         .Bool => return error{UnexpectedToken},
 
@@ -1540,14 +1544,14 @@ fn ParseInternalError(comptime T: type) type {
         .Int, .ComptimeInt => return error{ UnexpectedToken, InvalidNumber, Overflow, InvalidCharacter } ||
             std.fmt.ParseIntError || std.fmt.ParseFloatError,
         .Optional => |optionalInfo| {
-            return ParseInternalError(optionalInfo.child);
+            return ParseInternalError(optionalInfo.child, inferred_types ++ [_]type{T});
         },
         .Enum => return error{UnexpectedToken} || std.fmt.ParseIntError || std.meta.IntToEnumError,
         .Union => |unionInfo| {
             if (unionInfo.tag_type) |_| {
                 var errors = error{NoUnionMembersMatched};
-                inline for (unionInfo.fields) |u_field| {
-                    errors = errors || ParseInternalError(u_field.field_type);
+                for (unionInfo.fields) |u_field| {
+                    errors = errors || ParseInternalError(u_field.field_type, inferred_types ++ [_]type{T});
                 }
                 return errors;
             } else {
@@ -1563,8 +1567,8 @@ fn ParseInternalError(comptime T: type) type {
                 UnknownField,
                 MissingField,
             } || SkipValueError;
-            inline for (structInfo.fields) |field| {
-                errors = errors || ParseInternalError(field.field_type);
+            for (structInfo.fields) |field| {
+                errors = errors || ParseInternalError(field.field_type, inferred_types ++ [_]type{T});
             }
             return errors;
         },
@@ -1572,18 +1576,20 @@ fn ParseInternalError(comptime T: type) type {
             return error{
                 UnexpectedEndOfJson,
                 UnexpectedToken,
-            } || TokenStream.Error || ParseInternalError(arrayInfo.child) || UnescapeValidStringError;
+            } || TokenStream.Error || ParseInternalError(arrayInfo.child, inferred_types ++ [_]type{T}) ||
+                UnescapeValidStringError;
         },
         .Pointer => |ptrInfo| {
             var errors = error{AllocatorRequired} || std.mem.Allocator.Error;
 
             switch (ptrInfo.size) {
                 .One => {
-                    return errors || ParseInternalError(ptrInfo.child);
+                    return errors || ParseInternalError(ptrInfo.child, inferred_types ++ [_]type{T});
                 },
                 .Slice => {
                     return errors || error{ UnexpectedEndOfJson, UnexpectedToken } || TokenStream.Error ||
-                        ParseInternalError(ptrInfo.child) || UnescapeValidStringError;
+                        ParseInternalError(ptrInfo.child, inferred_types ++ [_]type{T}) ||
+                        UnescapeValidStringError;
                 },
                 else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
             }
@@ -1593,12 +1599,14 @@ fn ParseInternalError(comptime T: type) type {
     unreachable;
 }
 
+const parse_internal_inferred_types = [_]type{};
+
 fn parseInternal(
     comptime T: type,
     token: Token,
     tokens: *TokenStream,
     options: ParseOptions,
-) ParseInternalError(T)!T {
+) ParseInternalError(T, std.mem.span(&parse_internal_inferred_types))!T {
     switch (@typeInfo(T)) {
         .Bool => {
             return switch (token) {
@@ -2264,6 +2272,28 @@ test "parse into recursive union definition" {
     defer parseFree(T, r, ops);
 
     try testing.expectEqual(@as(i64, 58), r.values.array[0].integer);
+}
+
+const ParseIntoDoubleRecursiveUnionValueFirst = union(enum) {
+    integer: i64,
+    array: []const ParseIntoDoubleRecursiveUnionValueSecond,
+};
+
+const ParseIntoDoubleRecursiveUnionValueSecond = union(enum) {
+    boolean: bool,
+    array: []const ParseIntoDoubleRecursiveUnionValueFirst,
+};
+
+test "parse into double recursive union definition" {
+    const T = struct {
+        values: ParseIntoDoubleRecursiveUnionValueFirst,
+    };
+    const ops = ParseOptions{ .allocator = testing.allocator };
+
+    const r = try parse(T, &std.json.TokenStream.init("{\"values\":[[58]]}"), ops);
+    defer parseFree(T, r, ops);
+
+    try testing.expectEqual(@as(i64, 58), r.values.array[0].array[0].integer);
 }
 
 /// A non-stream JSON parser which constructs a tree of Value's.
