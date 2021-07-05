@@ -1468,14 +1468,12 @@ pub const ParseOptions = struct {
     allow_trailing_data: bool = false,
 };
 
-const SkipValueError = error{UnexpectedJsonDepth} || TokenStream.Error;
-
-fn skipValue(tokens: *TokenStream) SkipValueError!void {
+fn skipValue(tokens: *TokenStream) !void {
     const original_depth = tokens.stackUsed();
 
     // Return an error if no value is found
     _ = try tokens.next();
-    if (tokens.stackUsed() < original_depth) return SkipValueError.UnexpectedJsonDepth;
+    if (tokens.stackUsed() < original_depth) return error.UnexpectedJsonDepth;
     if (tokens.stackUsed() == original_depth) return;
 
     while (try tokens.next()) |_| {
@@ -1532,26 +1530,7 @@ test "skipValue" {
     }
 }
 
-const ParseInternalError = error{
-    AllocatorRequired,
-    DuplicateJSONField,
-    InvalidEnumTag,
-    InvalidNumber,
-    MissingField,
-    NoUnionMembersMatched,
-    Overflow,
-    UnexpectedEndOfJson,
-    UnexpectedToken,
-    UnexpectedValue,
-    UnknownField,
-} || SkipValueError || TokenStream.Error || error{OutOfMemory} || std.fmt.ParseIntError;
-
-fn parseInternal(
-    comptime T: type,
-    token: Token,
-    tokens: *TokenStream,
-    options: ParseOptions,
-) ParseInternalError!T {
+fn parseInternal(comptime T: type, token: Token, tokens: *TokenStream, options: ParseOptions) !T {
     switch (@typeInfo(T)) {
         .Bool => {
             return switch (token) {
@@ -1563,20 +1542,20 @@ fn parseInternal(
         .Float, .ComptimeFloat => {
             const numberToken = switch (token) {
                 .Number => |n| n,
-                else => return ParseInternalError.UnexpectedToken,
+                else => return error.UnexpectedToken,
             };
             return try std.fmt.parseFloat(T, numberToken.slice(tokens.slice, tokens.i - 1));
         },
         .Int, .ComptimeInt => {
             const numberToken = switch (token) {
                 .Number => |n| n,
-                else => return ParseInternalError.UnexpectedToken,
+                else => return error.UnexpectedToken,
             };
             if (numberToken.is_integer)
                 return try std.fmt.parseInt(T, numberToken.slice(tokens.slice, tokens.i - 1), 10);
             const float = try std.fmt.parseFloat(f128, numberToken.slice(tokens.slice, tokens.i - 1));
-            if (std.math.round(float) != float) return ParseInternalError.InvalidNumber;
-            if (float > std.math.maxInt(T) or float < std.math.minInt(T)) return ParseInternalError.Overflow;
+            if (std.math.round(float) != float) return error.InvalidNumber;
+            if (float > std.math.maxInt(T) or float < std.math.minInt(T)) return error.Overflow;
             return @floatToInt(T, float);
         },
         .Optional => |optionalInfo| {
@@ -1589,25 +1568,25 @@ fn parseInternal(
         .Enum => |enumInfo| {
             switch (token) {
                 .Number => |numberToken| {
-                    if (!numberToken.is_integer) return ParseInternalError.UnexpectedToken;
+                    if (!numberToken.is_integer) return error.UnexpectedToken;
                     const n = try std.fmt.parseInt(enumInfo.tag_type, numberToken.slice(tokens.slice, tokens.i - 1), 10);
                     return try std.meta.intToEnum(T, n);
                 },
                 .String => |stringToken| {
                     const source_slice = stringToken.slice(tokens.slice, tokens.i - 1);
                     switch (stringToken.escapes) {
-                        .None => return std.meta.stringToEnum(T, source_slice) orelse return ParseInternalError.InvalidEnumTag,
+                        .None => return std.meta.stringToEnum(T, source_slice) orelse return error.InvalidEnumTag,
                         .Some => {
                             inline for (enumInfo.fields) |field| {
                                 if (field.name.len == stringToken.decodedLength() and encodesTo(field.name, source_slice)) {
                                     return @field(T, field.name);
                                 }
                             }
-                            return ParseInternalError.InvalidEnumTag;
+                            return error.InvalidEnumTag;
                         },
                     }
                 },
-                else => return ParseInternalError.UnexpectedToken,
+                else => return error.UnexpectedToken,
             }
         },
         .Union => |unionInfo| {
@@ -1629,7 +1608,7 @@ fn parseInternal(
                         // otherwise continue through the `inline for`
                     }
                 }
-                return ParseInternalError.NoUnionMembersMatched;
+                return error.NoUnionMembersMatched;
             } else {
                 @compileError("Unable to parse into untagged union '" ++ @typeName(T) ++ "'");
             }
@@ -1637,7 +1616,7 @@ fn parseInternal(
         .Struct => |structInfo| {
             switch (token) {
                 .ObjectBegin => {},
-                else => return ParseInternalError.UnexpectedToken,
+                else => return error.UnexpectedToken,
             }
             var r: T = undefined;
             var fields_seen = [_]bool{false} ** structInfo.fields.len;
@@ -1650,7 +1629,7 @@ fn parseInternal(
             }
 
             while (true) {
-                switch ((try tokens.next()) orelse return ParseInternalError.UnexpectedEndOfJson) {
+                switch ((try tokens.next()) orelse return error.UnexpectedEndOfJson) {
                     .ObjectEnd => break,
                     .String => |stringToken| {
                         const key_source_slice = stringToken.slice(tokens.slice, tokens.i - 1);
@@ -1676,7 +1655,7 @@ fn parseInternal(
                                         found = true;
                                         break;
                                     } else if (options.duplicate_field_behavior == .Error) {
-                                        return ParseInternalError.DuplicateJSONField;
+                                        return error.DuplicateJSONField;
                                     } else if (options.duplicate_field_behavior == .UseLast) {
                                         if (!field.is_comptime) {
                                             parseFree(field.field_type, @field(r, field.name), child_options);
@@ -1686,7 +1665,7 @@ fn parseInternal(
                                 }
                                 if (field.is_comptime) {
                                     if (!try parsesTo(field.field_type, field.default_value.?, tokens, child_options)) {
-                                        return ParseInternalError.UnexpectedValue;
+                                        return error.UnexpectedValue;
                                     }
                                 } else {
                                     @field(r, field.name) = try parse(field.field_type, tokens, child_options);
@@ -1701,11 +1680,11 @@ fn parseInternal(
                                 try skipValue(tokens);
                                 continue;
                             } else {
-                                return ParseInternalError.UnknownField;
+                                return error.UnknownField;
                             }
                         }
                     },
-                    else => return ParseInternalError.UnexpectedToken,
+                    else => return error.UnexpectedToken,
                 }
             }
             inline for (structInfo.fields) |field, i| {
@@ -1715,7 +1694,7 @@ fn parseInternal(
                             @field(r, field.name) = default;
                         }
                     } else {
-                        return ParseInternalError.MissingField;
+                        return error.MissingField;
                     }
                 }
             }
@@ -1738,15 +1717,15 @@ fn parseInternal(
                     while (i < r.len) : (i += 1) {
                         r[i] = try parse(arrayInfo.child, tokens, child_options);
                     }
-                    const tok = (try tokens.next()) orelse return ParseInternalError.UnexpectedEndOfJson;
+                    const tok = (try tokens.next()) orelse return error.UnexpectedEndOfJson;
                     switch (tok) {
                         .ArrayEnd => {},
-                        else => return ParseInternalError.UnexpectedToken,
+                        else => return error.UnexpectedToken,
                     }
                     return r;
                 },
                 .String => |stringToken| {
-                    if (arrayInfo.child != u8) return ParseInternalError.UnexpectedToken;
+                    if (arrayInfo.child != u8) return error.UnexpectedToken;
                     var r: T = undefined;
                     const source_slice = stringToken.slice(tokens.slice, tokens.i - 1);
                     switch (stringToken.escapes) {
@@ -1755,11 +1734,11 @@ fn parseInternal(
                     }
                     return r;
                 },
-                else => return ParseInternalError.UnexpectedToken,
+                else => return error.UnexpectedToken,
             }
         },
         .Pointer => |ptrInfo| {
-            const allocator = options.allocator orelse return ParseInternalError.AllocatorRequired;
+            const allocator = options.allocator orelse return error.AllocatorRequired;
             switch (ptrInfo.size) {
                 .One => {
                     const r: T = try allocator.create(ptrInfo.child);
@@ -1779,7 +1758,7 @@ fn parseInternal(
                             }
 
                             while (true) {
-                                const tok = (try tokens.next()) orelse return ParseInternalError.UnexpectedEndOfJson;
+                                const tok = (try tokens.next()) orelse return error.UnexpectedEndOfJson;
                                 switch (tok) {
                                     .ArrayEnd => break,
                                     else => {},
@@ -1792,7 +1771,7 @@ fn parseInternal(
                             return arraylist.toOwnedSlice();
                         },
                         .String => |stringToken| {
-                            if (ptrInfo.child != u8) return ParseInternalError.UnexpectedToken;
+                            if (ptrInfo.child != u8) return error.UnexpectedToken;
                             const source_slice = stringToken.slice(tokens.slice, tokens.i - 1);
                             switch (stringToken.escapes) {
                                 .None => return allocator.dupe(u8, source_slice),
@@ -1804,7 +1783,7 @@ fn parseInternal(
                                 },
                             }
                         },
-                        else => return ParseInternalError.UnexpectedToken,
+                        else => return error.UnexpectedToken,
                     }
                 },
                 else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
