@@ -40,10 +40,13 @@ pub const Regular = struct {
     linkage: Linkage,
 
     /// Symbol address.
-    address: u64,
+    address: u64 = 0,
 
-    /// Section ID where the symbol resides.
-    section: u8,
+    /// Segment ID
+    segment_id: u16 = 0,
+
+    /// Section ID
+    section: u16 = 0,
 
     /// Whether the symbol is a weak ref.
     weak_ref: bool = false,
@@ -51,6 +54,8 @@ pub const Regular = struct {
     /// Object file where to locate this symbol.
     /// null means self-reference.
     file: ?*Object = null,
+
+    local_sym_index: u32 = 0,
 
     pub const Linkage = enum {
         translation_unit,

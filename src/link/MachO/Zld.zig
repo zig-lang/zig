@@ -104,6 +104,7 @@ objc_classrefs_section_index: ?u16 = null,
 objc_data_section_index: ?u16 = null,
 
 locals: std.ArrayListUnmanaged(*Symbol) = .{},
+imports: std.ArrayListUnmanaged(*Symbol) = .{},
 globals: std.StringArrayHashMapUnmanaged(*Symbol) = .{},
 
 /// Offset into __DATA,__common section.
@@ -117,6 +118,8 @@ stubs: std.ArrayListUnmanaged(*Symbol) = .{},
 got_entries: std.ArrayListUnmanaged(*Symbol) = .{},
 
 stub_helper_stubs_start_off: ?u64 = null,
+
+last_text_block: ?*TextBlock = null,
 
 pub const Output = struct {
     tag: enum { exe, dylib },
@@ -135,12 +138,11 @@ const TlvOffset = struct {
 };
 
 pub const TextBlock = struct {
-    allocator: *Allocator,
     local_sym_index: u32,
     aliases: std.ArrayList(u32),
     references: std.ArrayList(u32),
     code: []u8,
-    relocs: ?std.ArrayList(*Relocation) = null,
+    relocs: std.ArrayList(*Relocation),
     size: u64,
     alignment: u32,
     segment_id: u16,
@@ -151,13 +153,32 @@ pub const TextBlock = struct {
     pub fn deinit(block: *TextBlock, allocator: *Allocator) void {
         block.aliases.deinit();
         block.references.deinit();
-        if (block.relocs) |relocs| {
-            for (relocs.items) |reloc| {
-                allocator.destroy(reloc);
-            }
-            relocs.deinit();
+        for (block.relocs.items) |reloc| {
+            allocator.destroy(reloc);
         }
+        block.relocs.deinit();
         allocator.free(code);
+    }
+
+    fn print(self: *const TextBlock, zld: *Zld) void {
+        if (self.prev) |prev| {
+            prev.print(zld);
+        }
+
+        log.warn("TextBlock", .{});
+        log.warn("  | {}: '{s}'", .{ self.local_sym_index, zld.locals.items[self.local_sym_index].name });
+        log.warn("  | Aliases:", .{});
+        for (self.aliases.items) |index| {
+            log.warn("    | {}: '{s}'", .{ index, zld.locals.items[index].name });
+        }
+        log.warn("  | References:", .{});
+        for (self.references.items) |index| {
+            log.warn("    | {}: '{s}'", .{ index, zld.locals.items[index].name });
+        }
+        log.warn("  | size = {}", .{self.size});
+        log.warn("  | align = {}", .{self.alignment});
+        log.warn("  | segment_id = {}", .{self.segment_id});
+        log.warn("  | section_id = {}", .{self.section_id});
     }
 };
 
@@ -200,11 +221,13 @@ pub fn deinit(self: *Zld) void {
     }
     self.dylibs.deinit(self.allocator);
 
-    for (self.globals.values()) |sym| {
+    self.globals.deinit(self.allocator);
+
+    for (self.imports.items) |sym| {
         sym.deinit(self.allocator);
         self.allocator.destroy(sym);
     }
-    self.globals.deinit(self.allocator);
+    self.imports.deinit(self.allocator);
 
     for (self.locals.items) |sym| {
         sym.deinit(self.allocator);
@@ -252,20 +275,21 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     try self.parseLibs(args.libs, args.syslibroot);
     try self.resolveSymbols();
     try self.parseTextBlocks();
-    try self.resolveStubsAndGotEntries();
-    try self.updateMetadata();
-    try self.sortSections();
-    try self.addRpaths(args.rpaths);
-    try self.addDataInCodeLC();
-    try self.addCodeSignatureLC();
-    try self.allocateTextSegment();
-    try self.allocateDataConstSegment();
-    try self.allocateDataSegment();
-    self.allocateLinkeditSegment();
-    try self.allocateSymbols();
-    try self.allocateTentativeSymbols();
-    try self.allocateProxyBindAddresses();
-    try self.flush();
+    return error.TODO;
+    // try self.resolveStubsAndGotEntries();
+    // try self.updateMetadata();
+    // try self.sortSections();
+    // try self.addRpaths(args.rpaths);
+    // try self.addDataInCodeLC();
+    // try self.addCodeSignatureLC();
+    // try self.allocateTextSegment();
+    // try self.allocateDataConstSegment();
+    // try self.allocateDataSegment();
+    // self.allocateLinkeditSegment();
+    // try self.allocateSymbols();
+    // try self.allocateTentativeSymbols();
+    // try self.allocateProxyBindAddresses();
+    // try self.flush();
 }
 
 fn parseInputFiles(self: *Zld, files: []const []const u8, syslibroot: ?[]const u8) !void {
@@ -1509,13 +1533,11 @@ fn resolveSymbolsInObject(self: *Zld, object: *Object) !void {
             symbol.payload = .{
                 .regular = .{
                     .linkage = .translation_unit,
-                    .address = sym.n_value,
-                    .section = sym.n_sect - 1,
                     .weak_ref = Symbol.isWeakRef(sym),
                     .file = object,
+                    .local_sym_index = @intCast(u32, self.locals.items.len),
                 },
             };
-            const index = @intCast(u32, self.locals.items.len);
             try self.locals.append(self.allocator, symbol);
             try object.symbols.append(self.allocator, symbol);
             continue;
@@ -1550,8 +1572,6 @@ fn resolveSymbolsInObject(self: *Zld, object: *Object) !void {
                 symbol.payload = .{
                     .regular = .{
                         .linkage = linkage,
-                        .address = sym.n_value,
-                        .section = sym.n_sect - 1,
                         .weak_ref = Symbol.isWeakRef(sym),
                         .file = object,
                     },
@@ -1581,6 +1601,11 @@ fn resolveSymbolsInObject(self: *Zld, object: *Object) !void {
 }
 
 fn resolveSymbols(self: *Zld) !void {
+    // TODO mimicking insertion of null symbol from incremental linker.
+    // This will need to moved.
+    const null_sym = try Symbol.new(self.allocator, "");
+    try self.locals.append(self.allocator, null_sym);
+
     // First pass, resolve symbols in provided objects.
     for (self.objects.items) |object| {
         try self.resolveSymbolsInObject(object);
@@ -1609,11 +1634,18 @@ fn resolveSymbols(self: *Zld) !void {
         }
     }
 
+    // Put any globally defined regular symbol as local.
     // Mark if we need to allocate zerofill section for tentative definitions
     for (self.globals.values()) |symbol| {
-        if (symbol.payload == .tentative) {
-            self.has_tentative_defs = true;
-            break;
+        switch (symbol.payload) {
+            .regular => |*reg| {
+                reg.local_sym_index = @intCast(u32, self.locals.items.len);
+                try self.locals.append(self.allocator, symbol);
+            },
+            .tentative => {
+                self.has_tentative_defs = true;
+            },
+            else => {},
         }
     }
 
@@ -1639,6 +1671,7 @@ fn resolveSymbols(self: *Zld) !void {
                     .file = dylib,
                 },
             };
+            try self.imports.append(self.allocator, symbol);
             continue :loop;
         }
     }
@@ -1667,6 +1700,7 @@ fn resolveSymbols(self: *Zld) !void {
             symbol.payload = .{
                 .proxy = .{},
             };
+            try self.imports.append(self.allocator, symbol);
         }
     }
 
@@ -1686,7 +1720,17 @@ fn resolveSymbols(self: *Zld) !void {
 
 fn parseTextBlocks(self: *Zld) !void {
     for (self.objects.items) |object| {
-        _ = try object.parseTextBlocks(self);
+        if (try object.parseTextBlocks(self)) |block| {
+            if (self.last_text_block) |last| {
+                last.next = block;
+                block.prev = last;
+            }
+            self.last_text_block = block;
+        }
+    }
+
+    if (self.last_text_block) |block| {
+        block.print(self);
     }
 }
 
