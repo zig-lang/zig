@@ -9,6 +9,7 @@ const log = std.log.scoped(.object);
 const macho = std.macho;
 const mem = std.mem;
 const reloc = @import("reloc.zig");
+const sort = std.sort;
 
 const Allocator = mem.Allocator;
 const Arch = std.Target.Cpu.Arch;
@@ -345,13 +346,15 @@ const TextBlockParser = struct {
     };
 
     fn lessThanBySeniority(context: SeniorityContext, lhs: NlistWithIndex, rhs: NlistWithIndex) bool {
-        const lreg = context.zld.locals.items[lhs.index].payload.regular;
-        const rreg = context.zld.locals.items[rhs.index].payload.regular;
+        const lsym = context.zld.locals.items[lhs.index];
+        const rsym = context.zld.locals.items[rhs.index];
+        const lreg = lsym.payload.regular;
+        const rreg = rsym.payload.regular;
 
         return switch (rreg.linkage) {
             .global => true,
             .linkage_unit => lreg.linkage == .translation_unit,
-            else => false,
+            else => lsym.isTemp(),
         };
     }
 
@@ -388,7 +391,7 @@ const TextBlockParser = struct {
 
         if (aliases.items.len > 1) {
             // Bubble-up senior symbol as the main link to the text block.
-            std.sort.sort(
+            sort.sort(
                 NlistWithIndex,
                 aliases.items,
                 SeniorityContext{ .zld = self.zld },
@@ -427,13 +430,12 @@ const TextBlockParser = struct {
         };
 
         self.index += 1;
-        block.print_this(self.zld);
 
         return block;
     }
 };
 
-pub fn parseTextBlocks(self: *Object, zld: *Zld) !?*TextBlock {
+pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
     const seg = self.load_commands.items[self.segment_cmd_index.?].Segment;
 
     log.warn("analysing {s}", .{self.name.?});
@@ -453,9 +455,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !?*TextBlock {
         });
     }
 
-    std.sort.sort(NlistWithIndex, sorted_nlists.items, {}, NlistWithIndex.lessThan);
-
-    var last_block: ?*TextBlock = null;
+    sort.sort(NlistWithIndex, sorted_nlists.items, {}, NlistWithIndex.lessThan);
 
     for (seg.sections.items) |sect, sect_id| {
         log.warn("putting section '{s},{s}' as a TextBlock", .{
@@ -496,24 +496,35 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !?*TextBlock {
                 };
 
                 while (try parser.next()) |block| {
-                    const sym = zld.locals.items[block.local_sym_index];
-                    if (sym.payload.regular.file) |file| {
-                        if (file != self) {
-                            log.warn("deduping definition of {s} in {s}", .{ sym.name, self.name.? });
-                            continue;
+                    {
+                        const sym = zld.locals.items[block.local_sym_index];
+                        const reg = &sym.payload.regular;
+                        if (reg.file) |file| {
+                            if (file != self) {
+                                log.warn("deduping definition of {s} in {s}", .{ sym.name, self.name.? });
+                                continue;
+                            }
+                        }
+                        reg.segment_id = match.seg;
+                        reg.section_id = match.sect;
+                    }
+
+                    if (block.aliases) |aliases| {
+                        for (aliases) |alias| {
+                            const sym = zld.locals.items[alias];
+                            const reg = &sym.payload.regular;
+                            reg.segment_id = match.seg;
+                            reg.section_id = match.sect;
                         }
                     }
 
-                    block.segment_id = match.seg;
-                    block.section_id = match.sect;
-
                     // TODO parse relocs
 
-                    if (last_block) |last| {
+                    if (zld.last_text_block) |last| {
                         last.next = block;
                         block.prev = last;
                     }
-                    last_block = block;
+                    zld.last_text_block = block;
                 }
 
                 break :next;
@@ -531,6 +542,8 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !?*TextBlock {
             symbol.payload = .{
                 .regular = .{
                     .linkage = .translation_unit,
+                    .segment_id = match.seg,
+                    .section_id = match.sect,
                     .file = self,
                 },
             };
@@ -545,21 +558,17 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !?*TextBlock {
                 .code = code,
                 .size = sect.size,
                 .alignment = sect.@"align",
-                .segment_id = match.seg,
-                .section_id = match.sect,
             };
 
             // TODO parse relocs
 
-            if (last_block) |last| {
+            if (zld.last_text_block) |last| {
                 last.next = block;
                 block.prev = last;
             }
-            last_block = block;
+            zld.last_text_block = block;
         }
     }
-
-    return last_block;
 }
 
 pub fn parseInitializers(self: *Object) !void {

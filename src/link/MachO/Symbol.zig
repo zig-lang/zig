@@ -46,7 +46,7 @@ pub const Regular = struct {
     segment_id: u16 = 0,
 
     /// Section ID
-    section: u16 = 0,
+    section_id: u16 = 0,
 
     /// Whether the symbol is a weak ref.
     weak_ref: bool = false,
@@ -69,7 +69,8 @@ pub const Regular = struct {
         try std.fmt.format(writer, "Regular {{ ", .{});
         try std.fmt.format(writer, ".linkage = {s},  ", .{self.linkage});
         try std.fmt.format(writer, ".address = 0x{x}, ", .{self.address});
-        try std.fmt.format(writer, ".section = {}, ", .{self.section});
+        try std.fmt.format(writer, ".segment_id = {}, ", .{self.segment_id});
+        try std.fmt.format(writer, ".section_id = {}, ", .{self.section_id});
         if (self.weak_ref) {
             try std.fmt.format(writer, ".weak_ref, ", .{});
         }
@@ -168,6 +169,21 @@ pub fn new(allocator: *Allocator, name: []const u8) !*Symbol {
     };
 
     return new_sym;
+}
+
+pub fn format(self: Symbol, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+    _ = fmt;
+    _ = options;
+    try std.fmt.format(writer, "Symbol {{", .{});
+    try std.fmt.format(writer, ".name = {s}, ", .{self.name});
+    if (self.got_index) |got_index| {
+        try std.fmt.format(writer, ".got_index = {}, ", .{got_index});
+    }
+    if (self.stubs_index) |stubs_index| {
+        try std.fmt.format(writer, ".stubs_index = {}, ", .{stubs_index});
+    }
+    try std.fmt.format(writer, "{}, ", .{self.payload});
+    try std.fmt.format(writer, "}}", .{});
 }
 
 pub fn isTemp(symbol: Symbol) bool {

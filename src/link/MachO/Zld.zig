@@ -107,11 +107,6 @@ locals: std.ArrayListUnmanaged(*Symbol) = .{},
 imports: std.ArrayListUnmanaged(*Symbol) = .{},
 globals: std.StringArrayHashMapUnmanaged(*Symbol) = .{},
 
-/// Offset into __DATA,__common section.
-/// Set if the linker found tentative definitions in any of the objects.
-tentative_defs_offset: u64 = 0,
-has_tentative_defs: bool = false,
-
 threadlocal_offsets: std.ArrayListUnmanaged(TlvOffset) = .{}, // TODO merge with Symbol abstraction
 local_rebases: std.ArrayListUnmanaged(Pointer) = .{},
 stubs: std.ArrayListUnmanaged(*Symbol) = .{},
@@ -145,8 +140,6 @@ pub const TextBlock = struct {
     relocs: ?[]*Relocation = null,
     size: u64,
     alignment: u32,
-    segment_id: u16 = 0,
-    section_id: u16 = 0,
     next: ?*TextBlock = null,
     prev: ?*TextBlock = null,
 
@@ -168,23 +161,21 @@ pub const TextBlock = struct {
 
     pub fn print_this(self: *const TextBlock, zld: *Zld) void {
         log.warn("TextBlock", .{});
-        log.warn("  | {}: '{s}'", .{ self.local_sym_index, zld.locals.items[self.local_sym_index].name });
+        log.warn("  | {}: {}", .{ self.local_sym_index, zld.locals.items[self.local_sym_index] });
         if (self.aliases) |aliases| {
             log.warn("  | Aliases:", .{});
             for (aliases) |index| {
-                log.warn("    | {}: '{s}'", .{ index, zld.locals.items[index].name });
+                log.warn("    | {}: {}", .{ index, zld.locals.items[index] });
             }
         }
         if (self.references) |references| {
             log.warn("  | References:", .{});
             for (references) |index| {
-                log.warn("    | {}: '{s}'", .{ index, zld.locals.items[index].name });
+                log.warn("    | {}: {}", .{ index, zld.locals.items[index] });
             }
         }
         log.warn("  | size = {}", .{self.size});
         log.warn("  | align = {}", .{self.alignment});
-        log.warn("  | segment_id = {}", .{self.segment_id});
-        log.warn("  | section_id = {}", .{self.section_id});
     }
 
     pub fn print(self: *const TextBlock, zld: *Zld) void {
@@ -300,7 +291,6 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     // try self.allocateDataSegment();
     // self.allocateLinkeditSegment();
     // try self.allocateSymbols();
-    // try self.allocateTentativeSymbols();
     // try self.allocateProxyBindAddresses();
     // try self.flush();
 }
@@ -413,37 +403,6 @@ fn updateMetadata(self: *Zld) !void {
 
             try self.mapAndUpdateSections(object, @intCast(u16, sect_id), match.seg, match.sect);
         }
-    }
-
-    // Ensure we have __DATA,__common section if we have tentative definitions.
-    // Update size and alignment of __DATA,__common section.
-    if (self.has_tentative_defs) {
-        const data_seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-        const common_section_index = self.common_section_index orelse ind: {
-            self.common_section_index = @intCast(u16, data_seg.sections.items.len);
-            try data_seg.addSection(self.allocator, "__common", .{
-                .flags = macho.S_ZEROFILL,
-            });
-            break :ind self.common_section_index.?;
-        };
-        const common_sect = &data_seg.sections.items[common_section_index];
-
-        var max_align: u16 = 0;
-        var added_size: u64 = 0;
-        for (self.globals.values()) |sym| {
-            if (sym.payload != .tentative) continue;
-            max_align = math.max(max_align, sym.payload.tentative.alignment);
-            added_size += sym.payload.tentative.size;
-        }
-
-        common_sect.@"align" = math.max(common_sect.@"align", max_align);
-
-        const alignment = try math.powi(u32, 2, common_sect.@"align");
-        const offset = mem.alignForwardGeneric(u64, common_sect.size, alignment);
-        const size = mem.alignForwardGeneric(u64, added_size, alignment);
-
-        common_sect.size = offset + size;
-        self.tentative_defs_offset = offset;
     }
 
     tlv_align: {
@@ -1182,48 +1141,6 @@ fn allocateSymbols(self: *Zld) !void {
     }
 }
 
-fn allocateTentativeSymbols(self: *Zld) !void {
-    if (!self.has_tentative_defs) return;
-
-    const data_seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-    const common_sect = &data_seg.sections.items[self.common_section_index.?];
-
-    const alignment = try math.powi(u32, 2, common_sect.@"align");
-    var base_address: u64 = common_sect.addr + self.tentative_defs_offset;
-
-    log.debug("base address for tentative definitions 0x{x}", .{base_address});
-
-    // TODO there might be a more generic way of doing this.
-    var section: u8 = 0;
-    for (self.load_commands.items) |cmd, cmd_id| {
-        if (cmd != .Segment) break;
-        if (cmd_id == self.data_segment_cmd_index.?) {
-            section += @intCast(u8, self.common_section_index.?) + 1;
-            break;
-        }
-        section += @intCast(u8, cmd.Segment.sections.items.len);
-    }
-
-    // Convert tentative definitions into regular symbols.
-    for (self.globals.values()) |sym| {
-        if (sym.payload != .tentative) continue;
-
-        const address = mem.alignForwardGeneric(u64, base_address + sym.payload.tentative.size, alignment);
-
-        log.debug("tentative definition '{s}' allocated from 0x{x} to 0x{x}", .{ sym.name, base_address, address });
-
-        sym.payload = .{
-            .regular = .{
-                .linkage = .global,
-                .address = base_address,
-                .section = section,
-                .weak_ref = false,
-            },
-        };
-        base_address = address;
-    }
-}
-
 fn allocateProxyBindAddresses(self: *Zld) !void {
     for (self.objects.items) |object| {
         for (object.sections.items) |sect| {
@@ -1648,15 +1565,56 @@ fn resolveSymbols(self: *Zld) !void {
     }
 
     // Put any globally defined regular symbol as local.
-    // Mark if we need to allocate zerofill section for tentative definitions
+    // Convert any tentative definition into a regular symbol and allocate
+    // text blocks for each tentative defintion.
     for (self.globals.values()) |symbol| {
         switch (symbol.payload) {
             .regular => |*reg| {
                 reg.local_sym_index = @intCast(u32, self.locals.items.len);
                 try self.locals.append(self.allocator, symbol);
             },
-            .tentative => {
-                self.has_tentative_defs = true;
+            .tentative => |tent| {
+                if (self.common_section_index == null) {
+                    const data_seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
+                    self.common_section_index = @intCast(u16, data_seg.sections.items.len);
+                    try data_seg.addSection(self.allocator, "__common", .{
+                        .flags = macho.S_ZEROFILL,
+                    });
+                }
+
+                const size = tent.size;
+                const code = try self.allocator.alloc(u8, size);
+                mem.set(u8, code, 0);
+                const alignment = tent.alignment;
+                const local_sym_index = @intCast(u32, self.locals.items.len);
+
+                symbol.payload = .{
+                    .regular = .{
+                        .linkage = .global,
+                        .segment_id = self.data_segment_cmd_index.?,
+                        .section_id = self.common_section_index.?,
+                        .local_sym_index = local_sym_index,
+                    },
+                };
+                try self.locals.append(self.allocator, symbol);
+
+                const block = try self.allocator.create(TextBlock);
+                errdefer self.allocator.destroy(block);
+
+                block.* = .{
+                    .local_sym_index = local_sym_index,
+                    .code = code,
+                    .size = size,
+                    .alignment = alignment,
+                };
+
+                // TODO I'm not 100% sure about this yet, but I believe we should keep a separate list of
+                // TextBlocks per segment.
+                if (self.last_text_block) |last| {
+                    last.next = block;
+                    block.prev = last;
+                }
+                self.last_text_block = block;
             },
             else => {},
         }
@@ -1733,13 +1691,7 @@ fn resolveSymbols(self: *Zld) !void {
 
 fn parseTextBlocks(self: *Zld) !void {
     for (self.objects.items) |object| {
-        if (try object.parseTextBlocks(self)) |block| {
-            if (self.last_text_block) |last| {
-                last.next = block;
-                block.prev = last;
-            }
-            self.last_text_block = block;
-        }
+        try object.parseTextBlocks(self);
     }
 
     if (self.last_text_block) |block| {
