@@ -135,13 +135,30 @@ const TlvOffset = struct {
 };
 
 pub const TextBlock = struct {
-    local_sym_index: ?u32 = null,
+    allocator: *Allocator,
+    local_sym_index: u32,
+    aliases: std.ArrayList(u32),
+    references: std.ArrayList(u32),
+    code: []u8,
+    relocs: ?std.ArrayList(*Relocation) = null,
     size: u64,
     alignment: u32,
-    code: []u8,
-    relocs: []*Relocation,
     segment_id: u16,
     section_id: u16,
+    next: ?*TextBlock = null,
+    prev: ?*TextBlock = null,
+
+    pub fn deinit(block: *TextBlock, allocator: *Allocator) void {
+        block.aliases.deinit();
+        block.references.deinit();
+        if (block.relocs) |relocs| {
+            for (relocs.items) |reloc| {
+                allocator.destroy(reloc);
+            }
+            relocs.deinit();
+        }
+        allocator.free(code);
+    }
 };
 
 /// Default path to dyld
@@ -1669,7 +1686,7 @@ fn resolveSymbols(self: *Zld) !void {
 
 fn parseTextBlocks(self: *Zld) !void {
     for (self.objects.items) |object| {
-        try object.parseTextBlocks(self);
+        _ = try object.parseTextBlocks(self);
     }
 }
 

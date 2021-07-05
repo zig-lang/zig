@@ -343,7 +343,7 @@ pub fn parseSections(self: *Object) !void {
     }
 }
 
-pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
+pub fn parseTextBlocks(self: *Object, zld: *Zld) !*TextBlock {
     const seg = self.load_commands.items[self.segment_cmd_index.?].Segment;
 
     log.warn("analysing {s}", .{self.name.?});
@@ -501,6 +501,54 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
             return error.TODOOneLargeTextBlock;
         }
     }
+}
+
+const SectionAsTextBlocksArgs = struct {
+    sect: macho.section_64,
+    code: []u8,
+    subsections_via_symbols: bool = false,
+    relocs: ?[]macho.relocation_info = null,
+    segment_id: u16 = 0,
+    section_id: u16 = 0,
+};
+
+fn sectionAsTextBlocks(self: *Object, args: SectionAsTextBlocksArgs) !*TextBlock {
+    const sect = args.sect;
+
+    log.warn("putting section '{s},{s}' as a TextBlock", .{ segmentName(sect), sectionName(sect) });
+
+    // Section alignment will be the assumed alignment per symbol.
+    const alignment = sect.@"align";
+
+    const first_block: *TextBlock = blk: {
+        if (args.subsections_via_symbols) {
+            return error.TODO;
+        } else {
+            const block = try self.allocator.create(TextBlock);
+            errdefer self.allocator.destroy(block);
+
+            block.* = .{
+                .ref = .{
+                    .section = undefined, // Will be populated when we allocated final sections.
+                },
+                .code = args.code,
+                .relocs = null,
+                .size = sect.size,
+                .alignment = alignment,
+                .segment_id = args.segment_id,
+                .section_id = args.section_id,
+            };
+
+            // TODO parse relocs
+            if (args.relocs) |relocs| {
+                block.relocs = try reloc.parse(self.allocator, self.arch.?, args.code, relocs, symbols);
+            }
+
+            break :blk block;
+        }
+    };
+
+    return first_block;
 }
 
 pub fn parseInitializers(self: *Object) !void {
