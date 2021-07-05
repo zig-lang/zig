@@ -139,46 +139,59 @@ const TlvOffset = struct {
 
 pub const TextBlock = struct {
     local_sym_index: u32,
-    aliases: std.ArrayList(u32),
-    references: std.ArrayList(u32),
+    aliases: ?[]u32 = null,
+    references: ?[]u32 = null,
     code: []u8,
-    relocs: std.ArrayList(*Relocation),
+    relocs: ?[]*Relocation = null,
     size: u64,
     alignment: u32,
-    segment_id: u16,
-    section_id: u16,
+    segment_id: u16 = 0,
+    section_id: u16 = 0,
     next: ?*TextBlock = null,
     prev: ?*TextBlock = null,
 
     pub fn deinit(block: *TextBlock, allocator: *Allocator) void {
-        block.aliases.deinit();
-        block.references.deinit();
+        if (block.aliases) |aliases| {
+            allocator.free(aliases);
+        }
+        if (block.references) |references| {
+            allocator.free(references);
+        }
         for (block.relocs.items) |reloc| {
             allocator.destroy(reloc);
         }
-        block.relocs.deinit();
+        if (block.relocs) |relocs| {
+            allocator.free(relocs);
+        }
         allocator.free(code);
     }
 
-    fn print(self: *const TextBlock, zld: *Zld) void {
-        if (self.prev) |prev| {
-            prev.print(zld);
-        }
-
+    pub fn print_this(self: *const TextBlock, zld: *Zld) void {
         log.warn("TextBlock", .{});
         log.warn("  | {}: '{s}'", .{ self.local_sym_index, zld.locals.items[self.local_sym_index].name });
-        log.warn("  | Aliases:", .{});
-        for (self.aliases.items) |index| {
-            log.warn("    | {}: '{s}'", .{ index, zld.locals.items[index].name });
+        if (self.aliases) |aliases| {
+            log.warn("  | Aliases:", .{});
+            for (aliases) |index| {
+                log.warn("    | {}: '{s}'", .{ index, zld.locals.items[index].name });
+            }
         }
-        log.warn("  | References:", .{});
-        for (self.references.items) |index| {
-            log.warn("    | {}: '{s}'", .{ index, zld.locals.items[index].name });
+        if (self.references) |references| {
+            log.warn("  | References:", .{});
+            for (references) |index| {
+                log.warn("    | {}: '{s}'", .{ index, zld.locals.items[index].name });
+            }
         }
         log.warn("  | size = {}", .{self.size});
         log.warn("  | align = {}", .{self.alignment});
         log.warn("  | segment_id = {}", .{self.segment_id});
         log.warn("  | section_id = {}", .{self.section_id});
+    }
+
+    pub fn print(self: *const TextBlock, zld: *Zld) void {
+        if (self.prev) |prev| {
+            prev.print(zld);
+        }
+        self.print_this(zld);
     }
 };
 
