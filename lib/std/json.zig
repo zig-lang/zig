@@ -1468,7 +1468,9 @@ pub const ParseOptions = struct {
     allow_trailing_data: bool = false,
 };
 
-fn skipValue(tokens: *TokenStream) !void {
+const SkipValueError = error{UnexpectedJsonDepth} || TokenStream.Error;
+
+fn skipValue(tokens: *TokenStream) SkipValueError!void {
     const original_depth = tokens.stackUsed();
 
     // Return an error if no value is found
@@ -1530,7 +1532,73 @@ test "skipValue" {
     }
 }
 
-fn parseInternal(comptime T: type, token: Token, tokens: *TokenStream, options: ParseOptions) !T {
+fn ParseInternalError(comptime T: type) type {
+    switch (@typeInfo(T)) {
+        .Bool => return error{UnexpectedToken},
+
+        .Float, .ComptimeFloat => return error{UnexpectedToken} || std.fmt.ParseFloatError,
+        .Int, .ComptimeInt => return error{ UnexpectedToken, InvalidNumber, Overflow, InvalidCharacter } ||
+            std.fmt.ParseIntError || std.fmt.ParseFloatError,
+        .Optional => |optionalInfo| {
+            return ParseInternalError(optionalInfo.child);
+        },
+        .Enum => return error{UnexpectedToken} || std.fmt.ParseIntError || std.meta.IntToEnumError,
+        .Union => |unionInfo| {
+            if (unionInfo.tag_type) |_| {
+                var errors = error{NoUnionMembersMatched};
+                inline for (unionInfo.fields) |u_field| {
+                    errors = errors || ParseInternalError(u_field.field_type);
+                }
+                return errors;
+            } else {
+                @compileError("Unable to parse into untagged union '" ++ @typeName(T) ++ "'");
+            }
+        },
+        .Struct => |structInfo| {
+            var errors = error{
+                DuplicateJSONField,
+                UnexpectedEndOfJson,
+                UnexpectedToken,
+                UnexpectedValue,
+                UnknownField,
+                MissingField,
+            } || SkipValueError;
+            inline for (structInfo.fields) |field| {
+                errors = errors || ParseInternalError(field.field_type);
+            }
+            return errors;
+        },
+        .Array => |arrayInfo| {
+            return error{
+                UnexpectedEndOfJson,
+                UnexpectedToken,
+            } || TokenStream.Error || ParseInternalError(arrayInfo.child) || UnescapeValidStringError;
+        },
+        .Pointer => |ptrInfo| {
+            var errors = error{AllocatorRequired} || std.mem.Allocator.Error;
+
+            switch (ptrInfo.size) {
+                .One => {
+                    return errors || ParseInternalError(ptrInfo.child);
+                },
+                .Slice => {
+                    return errors || error{ UnexpectedEndOfJson, UnexpectedToken } || TokenStream.Error ||
+                        ParseInternalError(ptrInfo.child) || UnescapeValidStringError;
+                },
+                else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
+            }
+        },
+        else => return error{},
+    }
+    unreachable;
+}
+
+fn parseInternal(
+    comptime T: type,
+    token: Token,
+    tokens: *TokenStream,
+    options: ParseOptions,
+) ParseInternalError(T)!T {
     switch (@typeInfo(T)) {
         .Bool => {
             return switch (token) {
@@ -2435,10 +2503,12 @@ pub const Parser = struct {
     }
 };
 
+pub const UnescapeValidStringError = error{InvalidUnicodeHexSymbol};
+
 /// Unescape a JSON string
 /// Only to be used on strings already validated by the parser
 /// (note the unreachable statements and lack of bounds checking)
-pub fn unescapeValidString(output: []u8, input: []const u8) !void {
+pub fn unescapeValidString(output: []u8, input: []const u8) UnescapeValidStringError!void {
     var inIndex: usize = 0;
     var outIndex: usize = 0;
 
@@ -2474,11 +2544,11 @@ pub fn unescapeValidString(output: []u8, input: []const u8) !void {
             } else |err| {
                 // it might be a surrogate pair
                 if (err != error.Utf8CannotEncodeSurrogateHalf) {
-                    return error.InvalidUnicodeHexSymbol;
+                    return UnescapeValidStringError.InvalidUnicodeHexSymbol;
                 }
                 // check if a second code unit is present
                 if (inIndex + 7 >= input.len or input[inIndex + 6] != '\\' or input[inIndex + 7] != 'u') {
-                    return error.InvalidUnicodeHexSymbol;
+                    return UnescapeValidStringError.InvalidUnicodeHexSymbol;
                 }
 
                 const secondCodeUnit = std.fmt.parseInt(u16, input[inIndex + 8 .. inIndex + 12], 16) catch unreachable;
