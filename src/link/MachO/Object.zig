@@ -53,6 +53,7 @@ initializers: std.ArrayListUnmanaged(u32) = .{},
 data_in_code_entries: std.ArrayListUnmanaged(macho.data_in_code_entry) = .{},
 
 symbols: std.ArrayListUnmanaged(*Symbol) = .{},
+sections_as_symbols: std.AutoHashMapUnmanaged(u8, *Symbol) = .{},
 
 const DebugInfo = struct {
     inner: dwarf.DwarfInfo,
@@ -160,6 +161,7 @@ pub fn deinit(self: *Object) void {
     self.symtab.deinit(self.allocator);
     self.strtab.deinit(self.allocator);
     self.symbols.deinit(self.allocator);
+    self.sections_as_symbols.deinit(self.allocator);
 
     if (self.name) |n| {
         self.allocator.free(n);
@@ -312,7 +314,7 @@ fn filterRelocs(relocs: []macho.relocation_info, start: u64, end: u64) []macho.r
 
     while (true) {
         var change = false;
-        if (relocs[start_id].r_address > end) {
+        if (relocs[start_id].r_address >= end) {
             start_id += 1;
             change = true;
         }
@@ -332,6 +334,7 @@ const TextBlockParser = struct {
     allocator: *Allocator,
     section: macho.section_64,
     code: []u8,
+    relocs: []macho.relocation_info,
     object: *Object,
     zld: *Zld,
     nlists: []NlistWithIndex,
@@ -405,6 +408,7 @@ const TextBlockParser = struct {
 
         const start_addr = senior_nlist.nlist.n_value - self.section.addr;
         const end_addr = if (next_nlist) |n| n.nlist.n_value - self.section.addr else self.section.size;
+        log.warn("{} - {}", .{ start_addr, end_addr });
 
         const code = self.code[start_addr..end_addr];
         const size = code.len;
@@ -424,10 +428,17 @@ const TextBlockParser = struct {
         block.* = .{
             .local_sym_index = senior_nlist.index,
             .aliases = alias_only_indices,
-            .code = code,
+            .references = std.AutoArrayHashMap(u32, void).init(self.allocator),
+            .code = try self.allocator.dupe(u8, code),
+            .relocs = std.ArrayList(*Relocation).init(self.allocator),
             .size = size,
             .alignment = self.section.@"align",
         };
+
+        const relocs = filterRelocs(self.relocs, start_addr, end_addr);
+        if (relocs.len > 0) {
+            try self.object.parseRelocs(self.zld, relocs, block, start_addr);
+        }
 
         self.index += 1;
 
@@ -457,7 +468,8 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
 
     sort.sort(NlistWithIndex, sorted_nlists.items, {}, NlistWithIndex.lessThan);
 
-    for (seg.sections.items) |sect, sect_id| {
+    for (seg.sections.items) |sect, id| {
+        const sect_id = @intCast(u8, id);
         log.warn("putting section '{s},{s}' as a TextBlock", .{
             segmentName(sect),
             sectionName(sect),
@@ -474,6 +486,12 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
         defer self.allocator.free(code);
         _ = try self.file.?.preadAll(code, sect.offset);
 
+        // Read section's list of relocations
+        var raw_relocs = try self.allocator.alloc(u8, sect.nreloc * @sizeOf(macho.relocation_info));
+        defer self.allocator.free(raw_relocs);
+        _ = try self.file.?.preadAll(raw_relocs, sect.reloff);
+        const relocs = mem.bytesAsSlice(macho.relocation_info, raw_relocs);
+
         // Is there any padding between symbols within the section?
         const is_padded = self.header.?.flags & macho.MH_SUBSECTIONS_VIA_SYMBOLS != 0;
 
@@ -481,7 +499,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
             if (is_padded) blocks: {
                 const filtered_nlists = NlistWithIndex.filterInSection(
                     sorted_nlists.items,
-                    @intCast(u8, sect_id + 1),
+                    sect_id + 1,
                 );
 
                 if (filtered_nlists.len == 0) break :blocks;
@@ -490,6 +508,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                     .allocator = self.allocator,
                     .section = sect,
                     .code = code,
+                    .relocs = relocs,
                     .object = self,
                     .zld = zld,
                     .nlists = filtered_nlists,
@@ -518,8 +537,6 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                         }
                     }
 
-                    // TODO parse relocs
-
                     if (zld.last_text_block) |last| {
                         last.next = block;
                         block.prev = last;
@@ -531,14 +548,19 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
             }
 
             // Since there is no symbol to refer to this block, we create
-            // a temp one.
-            const name = try std.fmt.allocPrint(self.allocator, "l_{s}_{s}_{s}", .{
-                self.name.?,
-                segmentName(sect),
-                sectionName(sect),
-            });
-            defer self.allocator.free(name);
-            const symbol = try Symbol.new(self.allocator, name);
+            // a temp one, unless we already did that when working out the relocations
+            // of other text blocks.
+            const symbol = self.sections_as_symbols.get(sect_id) orelse symbol: {
+                const name = try std.fmt.allocPrint(self.allocator, "l_{s}_{s}_{s}", .{
+                    self.name.?,
+                    segmentName(sect),
+                    sectionName(sect),
+                });
+                defer self.allocator.free(name);
+                const symbol = try Symbol.new(self.allocator, name);
+                try self.sections_as_symbols.putNoClobber(self.allocator, sect_id, symbol);
+                break :symbol symbol;
+            };
             symbol.payload = .{
                 .regular = .{
                     .linkage = .translation_unit,
@@ -555,12 +577,16 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
 
             block.* = .{
                 .local_sym_index = local_sym_index,
-                .code = code,
+                .references = std.AutoArrayHashMap(u32, void).init(self.allocator),
+                .code = try self.allocator.dupe(u8, code),
+                .relocs = std.ArrayList(*Relocation).init(self.allocator),
                 .size = sect.size,
                 .alignment = sect.@"align",
             };
 
-            // TODO parse relocs
+            if (relocs.len > 0) {
+                try self.parseRelocs(zld, relocs, block, 0);
+            }
 
             if (zld.last_text_block) |last| {
                 last.next = block;
@@ -569,6 +595,70 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
             zld.last_text_block = block;
         }
     }
+}
+
+fn parseRelocs(
+    self: *Object,
+    zld: *Zld,
+    relocs: []const macho.relocation_info,
+    block: *TextBlock,
+    base_addr: u64,
+) !void {
+    var it = reloc.RelocIterator{
+        .buffer = relocs,
+    };
+
+    switch (self.arch.?) {
+        .aarch64 => {
+            var parser = reloc.aarch64.Parser{
+                .object = self,
+                .zld = zld,
+                .it = &it,
+                .block = block,
+                .base_addr = base_addr,
+            };
+            try parser.parse();
+        },
+        .x86_64 => {
+            var parser = reloc.x86_64.Parser{
+                .object = self,
+                .zld = zld,
+                .it = &it,
+                .block = block,
+                .base_addr = base_addr,
+            };
+            try parser.parse();
+        },
+        else => unreachable,
+    }
+}
+
+pub fn symbolFromReloc(self: *Object, rel: macho.relocation_info) !*Symbol {
+    const symbol = blk: {
+        if (rel.r_extern == 1) {
+            break :blk self.symbols.items[rel.r_symbolnum];
+        } else {
+            const sect_id = @intCast(u8, rel.r_symbolnum - 1);
+            const symbol = self.sections_as_symbols.get(sect_id) orelse symbol: {
+                // We need a valid pointer to Symbol even if there is no symbol, so we create a
+                // dummy symbol upfront which will later be populated when created a TextBlock from
+                // the target section here.
+                const seg = self.load_commands.items[self.segment_cmd_index.?].Segment;
+                const sect = seg.sections.items[sect_id];
+                const name = try std.fmt.allocPrint(self.allocator, "l_{s}_{s}_{s}", .{
+                    self.name.?,
+                    segmentName(sect),
+                    sectionName(sect),
+                });
+                defer self.allocator.free(name);
+                const symbol = try Symbol.new(self.allocator, name);
+                try self.sections_as_symbols.putNoClobber(self.allocator, sect_id, symbol);
+                break :symbol symbol;
+            };
+            break :blk symbol;
+        }
+    };
+    return symbol;
 }
 
 pub fn parseInitializers(self: *Object) !void {

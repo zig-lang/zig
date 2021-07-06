@@ -135,9 +135,9 @@ const TlvOffset = struct {
 pub const TextBlock = struct {
     local_sym_index: u32,
     aliases: ?[]u32 = null,
-    references: ?[]u32 = null,
+    references: std.AutoArrayHashMap(u32, void),
     code: []u8,
-    relocs: ?[]*Relocation = null,
+    relocs: std.ArrayList(*Relocation),
     size: u64,
     alignment: u32,
     next: ?*TextBlock = null,
@@ -147,15 +147,8 @@ pub const TextBlock = struct {
         if (block.aliases) |aliases| {
             allocator.free(aliases);
         }
-        if (block.references) |references| {
-            allocator.free(references);
-        }
-        for (block.relocs.items) |reloc| {
-            allocator.destroy(reloc);
-        }
-        if (block.relocs) |relocs| {
-            allocator.free(relocs);
-        }
+        block.relocs.deinit();
+        block.references.deinit();
         allocator.free(code);
     }
 
@@ -168,10 +161,17 @@ pub const TextBlock = struct {
                 log.warn("    | {}: {}", .{ index, zld.locals.items[index] });
             }
         }
-        if (self.references) |references| {
+        if (self.references.count() > 0) {
             log.warn("  | References:", .{});
-            for (references) |index| {
+            for (self.references.keys()) |index| {
                 log.warn("    | {}: {}", .{ index, zld.locals.items[index] });
+            }
+        }
+        log.warn("  | code.len = {}", .{self.code.len});
+        if (self.relocs.items.len > 0) {
+            log.warn("Relocations:", .{});
+            for (self.relocs.items) |rel| {
+                log.warn("  | {}", .{rel});
             }
         }
         log.warn("  | size = {}", .{self.size});
@@ -280,7 +280,6 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     try self.resolveSymbols();
     try self.parseTextBlocks();
     return error.TODO;
-    // try self.resolveStubsAndGotEntries();
     // try self.updateMetadata();
     // try self.sortSections();
     // try self.addRpaths(args.rpaths);
@@ -1603,7 +1602,9 @@ fn resolveSymbols(self: *Zld) !void {
 
                 block.* = .{
                     .local_sym_index = local_sym_index,
+                    .references = std.AutoArrayHashMap(u32, void).init(self.allocator),
                     .code = code,
+                    .relocs = std.ArrayList(*Relocation).init(self.allocator),
                     .size = size,
                     .alignment = alignment,
                 };
@@ -1624,6 +1625,9 @@ fn resolveSymbols(self: *Zld) !void {
     {
         // Put dyld_stub_binder as an undefined special symbol.
         const symbol = try Symbol.new(self.allocator, "dyld_stub_binder");
+        const index = @intCast(u32, self.got_entries.items.len);
+        symbol.got_index = index;
+        try self.got_entries.append(self.allocator, symbol);
         try self.globals.putNoClobber(self.allocator, symbol.name, symbol);
     }
 
@@ -1697,54 +1701,6 @@ fn parseTextBlocks(self: *Zld) !void {
     if (self.last_text_block) |block| {
         block.print(self);
     }
-}
-
-fn resolveStubsAndGotEntries(self: *Zld) !void {
-    for (self.objects.items) |object| {
-        log.debug("resolving stubs and got entries from {s}", .{object.name});
-
-        for (object.sections.items) |sect| {
-            const relocs = sect.relocs orelse continue;
-            for (relocs) |rel| {
-                switch (rel.@"type") {
-                    .unsigned => continue,
-                    .got_page, .got_page_off, .got_load, .got, .pointer_to_got => {
-                        const sym = object.symbols.items[rel.target.symbol];
-                        if (sym.got_index != null) continue;
-
-                        const index = @intCast(u32, self.got_entries.items.len);
-                        sym.got_index = index;
-                        try self.got_entries.append(self.allocator, sym);
-
-                        log.debug("    | found GOT entry {s}: {*}", .{ sym.name, sym });
-                    },
-                    else => {
-                        if (rel.target != .symbol) continue;
-
-                        const sym = object.symbols.items[rel.target.symbol];
-                        assert(sym.payload != .undef);
-
-                        if (sym.stubs_index != null) continue;
-                        if (sym.payload != .proxy) continue;
-
-                        const index = @intCast(u32, self.stubs.items.len);
-                        sym.stubs_index = index;
-                        try self.stubs.append(self.allocator, sym);
-
-                        log.debug("    | found stub {s}: {*}", .{ sym.name, sym });
-                    },
-                }
-            }
-        }
-    }
-
-    // Finally, put dyld_stub_binder as the final GOT entry
-    const sym = self.globals.get("dyld_stub_binder") orelse unreachable;
-    const index = @intCast(u32, self.got_entries.items.len);
-    sym.got_index = index;
-    try self.got_entries.append(self.allocator, sym);
-
-    log.debug("    | found GOT entry {s}: {*}", .{ sym.name, sym });
 }
 
 fn resolveRelocsAndWriteSections(self: *Zld) !void {
