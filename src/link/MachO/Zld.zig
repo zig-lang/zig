@@ -137,7 +137,7 @@ pub const TextBlock = struct {
     aliases: ?[]u32 = null,
     references: std.AutoArrayHashMap(u32, void),
     code: []u8,
-    relocs: std.ArrayList(*Relocation),
+    relocs: std.ArrayList(Relocation),
     size: u64,
     alignment: u32,
     next: ?*TextBlock = null,
@@ -1604,7 +1604,7 @@ fn resolveSymbols(self: *Zld) !void {
                     .local_sym_index = local_sym_index,
                     .references = std.AutoArrayHashMap(u32, void).init(self.allocator),
                     .code = code,
-                    .relocs = std.ArrayList(*Relocation).init(self.allocator),
+                    .relocs = std.ArrayList(Relocation).init(self.allocator),
                     .size = size,
                     .alignment = alignment,
                 };
@@ -1869,64 +1869,6 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
             }
         }
     }
-}
-
-fn relocTargetAddr(self: *Zld, object: *const Object, target: reloc.Relocation.Target) !u64 {
-    const target_addr = blk: {
-        switch (target) {
-            .symbol => |sym_id| {
-                const sym = object.symbols.items[sym_id];
-                switch (sym.payload) {
-                    .regular => |reg| {
-                        log.debug("    | regular '{s}'", .{sym.name});
-                        break :blk reg.address;
-                    },
-                    .proxy => |proxy| {
-                        if (mem.eql(u8, sym.name, "__tlv_bootstrap")) {
-                            log.debug("    | symbol '__tlv_bootstrap'", .{});
-                            const segment = self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-                            const tlv = segment.sections.items[self.tlv_section_index.?];
-                            break :blk tlv.addr;
-                        }
-
-                        log.debug("    | symbol stub '{s}'", .{sym.name});
-                        const segment = self.load_commands.items[self.text_segment_cmd_index.?].Segment;
-                        const stubs = segment.sections.items[self.stubs_section_index.?];
-                        const stubs_index = sym.stubs_index orelse {
-                            if (proxy.bind_info.items.len > 0) {
-                                break :blk 0; // Dynamically bound by dyld.
-                            }
-                            log.err(
-                                "expected stubs index or dynamic bind address when relocating symbol '{s}'",
-                                .{sym.name},
-                            );
-                            log.err("this is an internal linker error", .{});
-                            return error.FailedToResolveRelocationTarget;
-                        };
-                        break :blk stubs.addr + stubs_index * stubs.reserved2;
-                    },
-                    else => {
-                        log.err("failed to resolve symbol '{s}' as a relocation target", .{sym.name});
-                        log.err("this is an internal linker error", .{});
-                        return error.FailedToResolveRelocationTarget;
-                    },
-                }
-            },
-            .section => |sect_id| {
-                log.debug("    | section offset", .{});
-                const source_sect = object.sections.items[sect_id];
-                log.debug("    | section '{s},{s}'", .{
-                    segmentName(source_sect.inner),
-                    sectionName(source_sect.inner),
-                });
-                const target_map = source_sect.target_map orelse unreachable;
-                const target_seg = self.load_commands.items[target_map.segment_id].Segment;
-                const target_sect = target_seg.sections.items[target_map.section_id];
-                break :blk target_sect.addr + target_map.offset;
-            },
-        }
-    };
-    return target_addr;
 }
 
 fn populateMetadata(self: *Zld) !void {

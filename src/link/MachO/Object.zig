@@ -408,7 +408,6 @@ const TextBlockParser = struct {
 
         const start_addr = senior_nlist.nlist.n_value - self.section.addr;
         const end_addr = if (next_nlist) |n| n.nlist.n_value - self.section.addr else self.section.size;
-        log.warn("{} - {}", .{ start_addr, end_addr });
 
         const code = self.code[start_addr..end_addr];
         const size = code.len;
@@ -430,7 +429,7 @@ const TextBlockParser = struct {
             .aliases = alias_only_indices,
             .references = std.AutoArrayHashMap(u32, void).init(self.allocator),
             .code = try self.allocator.dupe(u8, code),
-            .relocs = std.ArrayList(*Relocation).init(self.allocator),
+            .relocs = std.ArrayList(Relocation).init(self.allocator),
             .size = size,
             .alignment = self.section.@"align",
         };
@@ -579,7 +578,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                 .local_sym_index = local_sym_index,
                 .references = std.AutoArrayHashMap(u32, void).init(self.allocator),
                 .code = try self.allocator.dupe(u8, code),
-                .relocs = std.ArrayList(*Relocation).init(self.allocator),
+                .relocs = std.ArrayList(Relocation).init(self.allocator),
                 .size = sect.size,
                 .alignment = sect.@"align",
             };
@@ -607,30 +606,14 @@ fn parseRelocs(
     var it = reloc.RelocIterator{
         .buffer = relocs,
     };
-
-    switch (self.arch.?) {
-        .aarch64 => {
-            var parser = reloc.aarch64.Parser{
-                .object = self,
-                .zld = zld,
-                .it = &it,
-                .block = block,
-                .base_addr = base_addr,
-            };
-            try parser.parse();
-        },
-        .x86_64 => {
-            var parser = reloc.x86_64.Parser{
-                .object = self,
-                .zld = zld,
-                .it = &it,
-                .block = block,
-                .base_addr = base_addr,
-            };
-            try parser.parse();
-        },
-        else => unreachable,
-    }
+    var parser = reloc.Parser{
+        .object = self,
+        .zld = zld,
+        .it = &it,
+        .block = block,
+        .base_addr = base_addr,
+    };
+    try parser.parse();
 }
 
 pub fn symbolFromReloc(self: *Object, rel: macho.relocation_info) !*Symbol {

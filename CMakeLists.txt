@@ -586,8 +586,6 @@ set(ZIG_STAGE2_SOURCES
     "${CMAKE_SOURCE_DIR}/src/link/MachO/bind.zig"
     "${CMAKE_SOURCE_DIR}/src/link/MachO/commands.zig"
     "${CMAKE_SOURCE_DIR}/src/link/MachO/reloc.zig"
-    "${CMAKE_SOURCE_DIR}/src/link/MachO/reloc/aarch64.zig"
-    "${CMAKE_SOURCE_DIR}/src/link/MachO/reloc/x86_64.zig"
     "${CMAKE_SOURCE_DIR}/src/link/Wasm.zig"
     "${CMAKE_SOURCE_DIR}/src/link/tapi.zig"
     "${CMAKE_SOURCE_DIR}/src/link/tapi/parse.zig"
