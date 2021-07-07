@@ -1,6 +1,7 @@
 const std = @import("std");
 const aarch64 = @import("../../codegen/aarch64.zig");
 const assert = std.debug.assert;
+const commands = @import("commands.zig");
 const log = std.log.scoped(.reloc);
 const macho = std.macho;
 const math = std.math;
@@ -567,14 +568,60 @@ pub const Parser = struct {
                 const index = @intCast(u32, self.zld.got_entries.items.len);
                 out_rel.target.got_index = index;
                 try self.zld.got_entries.append(self.zld.allocator, out_rel.target);
-                log.debug("adding GOT entry for symbol {s} at index {}", .{ out_rel.target.name, index });
-            }
 
-            if (out_rel.payload == .branch) {
+                log.debug("adding GOT entry for symbol {s} at index {}", .{ out_rel.target.name, index });
+            } else if (out_rel.payload == .unsigned) {
+                const sym = out_rel.target;
+                switch (sym.payload) {
+                    .proxy => {
+                        try sym.payload.proxy.bind_info.append(self.zld.allocator, .{
+                            .local_sym_index = self.block.local_sym_index,
+                            .offset = out_rel.offset,
+                        });
+                    },
+                    else => {
+                        const source_sym = self.zld.locals.items[self.block.local_sym_index];
+                        const source_reg = &source_sym.payload.regular;
+                        const seg = self.zld.load_commands.items[source_reg.segment_id].Segment;
+                        const sect = seg.sections.items[source_reg.section_id];
+                        const sect_type = commands.sectionType(sect);
+
+                        const should_rebase = rebase: {
+                            if (!out_rel.payload.unsigned.is_64bit) break :rebase false;
+
+                            // TODO actually, a check similar to what dyld is doing, that is, verifying
+                            // that the segment is writable should be enough here.
+                            const is_right_segment = blk: {
+                                if (self.zld.data_segment_cmd_index) |idx| {
+                                    if (source_reg.segment_id == idx) {
+                                        break :blk true;
+                                    }
+                                }
+                                if (self.zld.data_const_segment_cmd_index) |idx| {
+                                    if (source_reg.segment_id == idx) {
+                                        break :blk true;
+                                    }
+                                }
+                                break :blk false;
+                            };
+
+                            if (!is_right_segment) break :rebase false;
+                            if (sect_type != macho.S_LITERAL_POINTERS and
+                                sect_type != macho.S_REGULAR)
+                            {
+                                break :rebase false;
+                            }
+
+                            break :rebase true;
+                        };
+                        source_reg.should_rebase = should_rebase;
+                    },
+                }
+            } else if (out_rel.payload == .branch) blk: {
                 const sym = out_rel.target;
 
-                if (sym.stubs_index != null) continue;
-                if (sym.payload != .proxy) continue;
+                if (sym.stubs_index != null) break :blk;
+                if (sym.payload != .proxy) break :blk;
 
                 const index = @intCast(u32, self.zld.stubs.items.len);
                 sym.stubs_index = index;

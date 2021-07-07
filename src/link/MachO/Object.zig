@@ -339,6 +339,7 @@ const TextBlockParser = struct {
     zld: *Zld,
     nlists: []NlistWithIndex,
     index: u32 = 0,
+    match: Zld.MatchingSection,
 
     fn peek(self: *TextBlockParser) ?NlistWithIndex {
         return if (self.index + 1 < self.nlists.len) self.nlists[self.index + 1] else null;
@@ -405,6 +406,8 @@ const TextBlockParser = struct {
         const senior_nlist = aliases.pop();
         const senior_sym = self.zld.locals.items[senior_nlist.index];
         assert(senior_sym.payload == .regular);
+        senior_sym.payload.regular.segment_id = self.match.seg;
+        senior_sym.payload.regular.section_id = self.match.sect;
 
         const start_addr = senior_nlist.nlist.n_value - self.section.addr;
         const end_addr = if (next_nlist) |n| n.nlist.n_value - self.section.addr else self.section.size;
@@ -417,6 +420,11 @@ const TextBlockParser = struct {
             try out.ensureTotalCapacity(aliases.items.len);
             for (aliases.items) |alias| {
                 out.appendAssumeCapacity(alias.index);
+
+                const sym = self.zld.locals.items[alias.index];
+                const reg = &sym.payload.regular;
+                reg.segment_id = self.match.seg;
+                reg.section_id = self.match.sect;
             }
             break :blk out.toOwnedSlice();
         } else null;
@@ -437,6 +445,18 @@ const TextBlockParser = struct {
         const relocs = filterRelocs(self.relocs, start_addr, end_addr);
         if (relocs.len > 0) {
             try self.object.parseRelocs(self.zld, relocs, block, start_addr);
+        }
+
+        const is_zerofill = blk: {
+            const tseg = self.zld.load_commands.items[self.match.seg].Segment;
+            const tsect = tseg.sections.items[self.match.sect];
+            const tsect_type = sectionType(tsect);
+            break :blk tsect_type == macho.S_ZEROFILL or
+                tsect_type == macho.S_THREAD_LOCAL_ZEROFILL or
+                tsect_type == macho.S_THREAD_LOCAL_VARIABLES;
+        };
+        if (is_zerofill) {
+            mem.set(u8, block.code, 0);
         }
 
         self.index += 1;
@@ -511,28 +531,16 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                     .object = self,
                     .zld = zld,
                     .nlists = filtered_nlists,
+                    .match = match,
                 };
 
                 while (try parser.next()) |block| {
-                    {
-                        const sym = zld.locals.items[block.local_sym_index];
-                        const reg = &sym.payload.regular;
-                        if (reg.file) |file| {
-                            if (file != self) {
-                                log.warn("deduping definition of {s} in {s}", .{ sym.name, self.name.? });
-                                continue;
-                            }
-                        }
-                        reg.segment_id = match.seg;
-                        reg.section_id = match.sect;
-                    }
-
-                    if (block.aliases) |aliases| {
-                        for (aliases) |alias| {
-                            const sym = zld.locals.items[alias];
-                            const reg = &sym.payload.regular;
-                            reg.segment_id = match.seg;
-                            reg.section_id = match.sect;
+                    const sym = zld.locals.items[block.local_sym_index];
+                    const reg = &sym.payload.regular;
+                    if (reg.file) |file| {
+                        if (file != self) {
+                            log.warn("deduping definition of {s} in {s}", .{ sym.name, self.name.? });
+                            continue;
                         }
                     }
 
@@ -585,6 +593,18 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
 
             if (relocs.len > 0) {
                 try self.parseRelocs(zld, relocs, block, 0);
+            }
+
+            const is_zerofill = blk: {
+                const tseg = zld.load_commands.items[match.seg].Segment;
+                const tsect = tseg.sections.items[match.sect];
+                const tsect_type = sectionType(tsect);
+                break :blk tsect_type == macho.S_ZEROFILL or
+                    tsect_type == macho.S_THREAD_LOCAL_ZEROFILL or
+                    tsect_type == macho.S_THREAD_LOCAL_VARIABLES;
+            };
+            if (is_zerofill) {
+                mem.set(u8, block.code, 0);
             }
 
             if (zld.last_text_block) |last| {

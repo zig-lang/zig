@@ -2,6 +2,7 @@ const Symbol = @This();
 
 const std = @import("std");
 const assert = std.debug.assert;
+const commands = @import("commands.zig");
 const macho = std.macho;
 const mem = std.mem;
 
@@ -57,6 +58,8 @@ pub const Regular = struct {
 
     local_sym_index: u32 = 0,
 
+    should_rebase: bool = false,
+
     pub const Linkage = enum {
         translation_unit,
         linkage_unit,
@@ -73,6 +76,9 @@ pub const Regular = struct {
         try std.fmt.format(writer, ".section_id = {}, ", .{self.section_id});
         if (self.weak_ref) {
             try std.fmt.format(writer, ".weak_ref, ", .{});
+        }
+        if (self.should_rebase) {
+            try std.fmt.format(writer, ".should_rebase, ", .{});
         }
         if (self.file) |file| {
             try std.fmt.format(writer, ".file = {s}, ", .{file.name.?});
@@ -108,8 +114,8 @@ pub const Proxy = struct {
     /// Dynamic binding info - spots within the final
     /// executable where this proxy is referenced from.
     bind_info: std.ArrayListUnmanaged(struct {
-        segment_id: u16,
-        address: u64,
+        local_sym_index: u32,
+        offset: u32,
     }) = .{},
 
     /// Dylib where to locate this symbol.
@@ -196,6 +202,17 @@ pub fn isTemp(symbol: Symbol) bool {
         else => {},
     }
     return false;
+}
+
+pub fn needsTlvOffset(self: Symbol, zld: *Zld) bool {
+    if (self.payload != .regular) return false;
+
+    const reg = self.payload.regular;
+    const seg = zld.load_command.items[reg.segment_id].Segment;
+    const sect = seg.sections.items[reg.section_id];
+    const sect_type = commands.sectionType(sect);
+
+    return sect_type == macho.S_THREAD_LOCAL_VARIABLES;
 }
 
 pub fn asNlist(symbol: *Symbol, strtab: *StringTable) !macho.nlist_64 {

@@ -107,8 +107,6 @@ locals: std.ArrayListUnmanaged(*Symbol) = .{},
 imports: std.ArrayListUnmanaged(*Symbol) = .{},
 globals: std.StringArrayHashMapUnmanaged(*Symbol) = .{},
 
-threadlocal_offsets: std.ArrayListUnmanaged(TlvOffset) = .{}, // TODO merge with Symbol abstraction
-local_rebases: std.ArrayListUnmanaged(Pointer) = .{},
 stubs: std.ArrayListUnmanaged(*Symbol) = .{},
 got_entries: std.ArrayListUnmanaged(*Symbol) = .{},
 
@@ -197,8 +195,6 @@ pub fn init(allocator: *Allocator) !Zld {
 }
 
 pub fn deinit(self: *Zld) void {
-    self.threadlocal_offsets.deinit(self.allocator);
-    self.local_rebases.deinit(self.allocator);
     self.stubs.deinit(self.allocator);
     self.got_entries.deinit(self.allocator);
 
@@ -225,8 +221,6 @@ pub fn deinit(self: *Zld) void {
     }
     self.dylibs.deinit(self.allocator);
 
-    self.globals.deinit(self.allocator);
-
     for (self.imports.items) |sym| {
         sym.deinit(self.allocator);
         self.allocator.destroy(sym);
@@ -239,6 +233,7 @@ pub fn deinit(self: *Zld) void {
     }
     self.locals.deinit(self.allocator);
 
+    self.globals.deinit(self.allocator);
     self.strtab.deinit();
 }
 
@@ -290,7 +285,6 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     // try self.allocateDataSegment();
     // self.allocateLinkeditSegment();
     // try self.allocateSymbols();
-    // try self.allocateProxyBindAddresses();
     // try self.flush();
 }
 
@@ -449,7 +443,7 @@ fn updateMetadata(self: *Zld) !void {
     }
 }
 
-const MatchingSection = struct {
+pub const MatchingSection = struct {
     seg: u16,
     sect: u16,
 };
@@ -1140,31 +1134,6 @@ fn allocateSymbols(self: *Zld) !void {
     }
 }
 
-fn allocateProxyBindAddresses(self: *Zld) !void {
-    for (self.objects.items) |object| {
-        for (object.sections.items) |sect| {
-            const relocs = sect.relocs orelse continue;
-
-            for (relocs) |rel| {
-                if (rel.@"type" != .unsigned) continue; // GOT is currently special-cased
-                if (rel.target != .symbol) continue;
-
-                const sym = object.symbols.items[rel.target.symbol];
-                if (sym.payload != .proxy) continue;
-
-                const target_map = sect.target_map orelse continue;
-                const target_seg = self.load_commands.items[target_map.segment_id].Segment;
-                const target_sect = target_seg.sections.items[target_map.section_id];
-
-                try sym.payload.proxy.bind_info.append(self.allocator, .{
-                    .segment_id = target_map.segment_id,
-                    .address = target_sect.addr + target_map.offset + rel.offset,
-                });
-            }
-        }
-    }
-}
-
 fn writeStubHelperCommon(self: *Zld) !void {
     const text_segment = &self.load_commands.items[self.text_segment_cmd_index.?].Segment;
     const stub_helper = &text_segment.sections.items[self.stub_helper_section_index.?];
@@ -1748,72 +1717,6 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
                                 args.source_source_sect_addr = sect.inner.addr;
                                 args.source_target_sect_addr = source_sect.inner.addr;
                             }
-
-                            const sect_type = sectionType(target_sect);
-                            const should_rebase = rebase: {
-                                if (!unsigned.is_64bit) break :rebase false;
-
-                                // TODO actually, a check similar to what dyld is doing, that is, verifying
-                                // that the segment is writable should be enough here.
-                                const is_right_segment = blk: {
-                                    if (self.data_segment_cmd_index) |idx| {
-                                        if (target_map.segment_id == idx) {
-                                            break :blk true;
-                                        }
-                                    }
-                                    if (self.data_const_segment_cmd_index) |idx| {
-                                        if (target_map.segment_id == idx) {
-                                            break :blk true;
-                                        }
-                                    }
-                                    break :blk false;
-                                };
-
-                                if (!is_right_segment) break :rebase false;
-                                if (sect_type != macho.S_LITERAL_POINTERS and
-                                    sect_type != macho.S_REGULAR)
-                                {
-                                    break :rebase false;
-                                }
-                                if (rel.target == .symbol) {
-                                    const sym = object.symbols.items[rel.target.symbol];
-                                    if (sym.payload == .proxy) {
-                                        break :rebase false;
-                                    }
-                                }
-
-                                break :rebase true;
-                            };
-
-                            if (should_rebase) {
-                                try self.local_rebases.append(self.allocator, .{
-                                    .offset = source_addr - target_seg.inner.vmaddr,
-                                    .segment_id = target_map.segment_id,
-                                });
-                            }
-
-                            // TLV is handled via a separate offset mechanism.
-                            // Calculate the offset to the initializer.
-                            if (sect_type == macho.S_THREAD_LOCAL_VARIABLES) tlv: {
-                                // TODO we don't want to save offset to tlv_bootstrap
-                                if (mem.eql(u8, object.symbols.items[rel.target.symbol].name, "__tlv_bootstrap")) break :tlv;
-
-                                const base_addr = blk: {
-                                    if (self.tlv_data_section_index) |index| {
-                                        const tlv_data = target_seg.sections.items[index];
-                                        break :blk tlv_data.addr;
-                                    } else {
-                                        const tlv_bss = target_seg.sections.items[self.tlv_bss_section_index.?];
-                                        break :blk tlv_bss.addr;
-                                    }
-                                };
-                                // Since we require TLV data to always preceed TLV bss section, we calculate
-                                // offsets wrt to the former if it is defined; otherwise, wrt to the latter.
-                                try self.threadlocal_offsets.append(self.allocator, .{
-                                    .source_addr = args.source_addr,
-                                    .offset = args.target_addr - base_addr,
-                                });
-                            }
                         },
                         .got_page, .got_page_off, .got_load, .got, .pointer_to_got => {
                             const dc_seg = self.load_commands.items[self.data_const_segment_cmd_index.?].Segment;
@@ -1838,34 +1741,6 @@ fn resolveRelocsAndWriteSections(self: *Zld) !void {
 
                     try rel.resolve(args);
                 }
-            }
-
-            log.debug("writing contents of '{s},{s}' section from '{s}' from 0x{x} to 0x{x}", .{
-                segname,
-                sectname,
-                object.name,
-                target_sect_off,
-                target_sect_off + sect.code.len,
-            });
-
-            if (sectionType(target_sect) == macho.S_ZEROFILL or
-                sectionType(target_sect) == macho.S_THREAD_LOCAL_ZEROFILL or
-                sectionType(target_sect) == macho.S_THREAD_LOCAL_VARIABLES)
-            {
-                log.debug("zeroing out '{s},{s}' from 0x{x} to 0x{x}", .{
-                    segmentName(target_sect),
-                    sectionName(target_sect),
-                    target_sect_off,
-                    target_sect_off + sect.code.len,
-                });
-
-                // Zero-out the space
-                var zeroes = try self.allocator.alloc(u8, sect.code.len);
-                defer self.allocator.free(zeroes);
-                mem.set(u8, zeroes, 0);
-                try self.file.?.pwriteAll(zeroes, target_sect_off);
-            } else {
-                try self.file.?.pwriteAll(sect.code, target_sect_off);
             }
         }
     }
