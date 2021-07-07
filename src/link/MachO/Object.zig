@@ -512,10 +512,10 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
         const relocs = mem.bytesAsSlice(macho.relocation_info, raw_relocs);
 
         // Is there any padding between symbols within the section?
-        const is_padded = self.header.?.flags & macho.MH_SUBSECTIONS_VIA_SYMBOLS != 0;
+        const is_splittable = self.header.?.flags & macho.MH_SUBSECTIONS_VIA_SYMBOLS != 0;
 
         next: {
-            if (is_padded) blocks: {
+            if (is_splittable) blocks: {
                 const filtered_nlists = NlistWithIndex.filterInSection(
                     sorted_nlists.items,
                     sect_id + 1,
@@ -540,6 +540,8 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                     if (reg.file) |file| {
                         if (file != self) {
                             log.warn("deduping definition of {s} in {s}", .{ sym.name, self.name.? });
+                            block.deinit(self.allocator);
+                            self.allocator.destroy(block);
                             continue;
                         }
                     }

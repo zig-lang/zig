@@ -147,7 +147,7 @@ pub const TextBlock = struct {
         }
         block.relocs.deinit();
         block.references.deinit();
-        allocator.free(code);
+        allocator.free(block.code);
     }
 
     pub fn print_this(self: *const TextBlock, zld: *Zld) void {
