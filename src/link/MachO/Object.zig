@@ -435,6 +435,8 @@ const TextBlockParser = struct {
             .references = std.AutoArrayHashMap(u32, void).init(self.allocator),
             .code = try self.allocator.dupe(u8, code),
             .relocs = std.ArrayList(Relocation).init(self.allocator),
+            .rebases = std.ArrayList(u64).init(self.allocator),
+            .tlv_offsets = std.ArrayList(u64).init(self.allocator),
             .size = size,
             .alignment = self.section.@"align",
         };
@@ -442,18 +444,6 @@ const TextBlockParser = struct {
         const relocs = filterRelocs(self.relocs, start_addr, end_addr);
         if (relocs.len > 0) {
             try self.object.parseRelocs(self.zld, relocs, block, start_addr);
-        }
-
-        const is_zerofill = blk: {
-            const tseg = self.zld.load_commands.items[self.match.seg].Segment;
-            const tsect = tseg.sections.items[self.match.sect];
-            const tsect_type = sectionType(tsect);
-            break :blk tsect_type == macho.S_ZEROFILL or
-                tsect_type == macho.S_THREAD_LOCAL_ZEROFILL or
-                tsect_type == macho.S_THREAD_LOCAL_VARIABLES;
-        };
-        if (is_zerofill) {
-            mem.set(u8, block.code, 0);
         }
 
         self.index += 1;
@@ -589,24 +579,14 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                 .references = std.AutoArrayHashMap(u32, void).init(self.allocator),
                 .code = try self.allocator.dupe(u8, code),
                 .relocs = std.ArrayList(Relocation).init(self.allocator),
+                .rebases = std.ArrayList(u64).init(self.allocator),
+                .tlv_offsets = std.ArrayList(u64).init(self.allocator),
                 .size = sect.size,
                 .alignment = sect.@"align",
             };
 
             if (relocs.len > 0) {
                 try self.parseRelocs(zld, relocs, block, 0);
-            }
-
-            const is_zerofill = blk: {
-                const tseg = zld.load_commands.items[match.seg].Segment;
-                const tsect = tseg.sections.items[match.sect];
-                const tsect_type = sectionType(tsect);
-                break :blk tsect_type == macho.S_ZEROFILL or
-                    tsect_type == macho.S_THREAD_LOCAL_ZEROFILL or
-                    tsect_type == macho.S_THREAD_LOCAL_VARIABLES;
-            };
-            if (is_zerofill) {
-                mem.set(u8, block.code, 0);
             }
 
             if (zld.blocks.getPtr(match)) |last| {

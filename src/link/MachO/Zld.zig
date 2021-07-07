@@ -128,6 +128,8 @@ pub const TextBlock = struct {
     relocs: std.ArrayList(Relocation),
     size: u64,
     alignment: u32,
+    rebases: std.ArrayList(u64),
+    tlv_offsets: std.ArrayList(u64),
     next: ?*TextBlock = null,
     prev: ?*TextBlock = null,
 
@@ -137,6 +139,8 @@ pub const TextBlock = struct {
         }
         block.relocs.deinit();
         block.references.deinit();
+        block.rebases.deinit();
+        block.tlv_offsets.deinit();
         allocator.free(block.code);
     }
 
@@ -144,23 +148,29 @@ pub const TextBlock = struct {
         log.warn("TextBlock", .{});
         log.warn("  | {}: {}", .{ self.local_sym_index, zld.locals.items[self.local_sym_index] });
         if (self.aliases) |aliases| {
-            log.warn("  | Aliases:", .{});
+            log.warn("  | aliases:", .{});
             for (aliases) |index| {
                 log.warn("    | {}: {}", .{ index, zld.locals.items[index] });
             }
         }
         if (self.references.count() > 0) {
-            log.warn("  | References:", .{});
+            log.warn("  | references:", .{});
             for (self.references.keys()) |index| {
                 log.warn("    | {}: {}", .{ index, zld.locals.items[index] });
             }
         }
         log.warn("  | code.len = {}", .{self.code.len});
         if (self.relocs.items.len > 0) {
-            log.warn("Relocations:", .{});
+            log.warn("  | relocations:", .{});
             for (self.relocs.items) |rel| {
-                log.warn("  | {}", .{rel});
+                log.warn("    | {}", .{rel});
             }
+        }
+        if (self.rebases.items.len > 0) {
+            log.warn("  | rebases: {any}", .{self.rebases.items});
+        }
+        if (self.tlv_offsets.items.len > 0) {
+            log.warn("  | TLV offsets: {any}", .{self.tlv_offsets.items});
         }
         log.warn("  | size = {}", .{self.size});
         log.warn("  | align = {}", .{self.alignment});
@@ -271,6 +281,10 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     try self.addRpaths(args.rpaths);
     try self.addDataInCodeLC();
     try self.addCodeSignatureLC();
+    // try self.allocateTextSegment();
+    // try self.allocateDataConstSegment();
+    // try self.allocateDataSegment();
+    // self.allocateLinkeditSegment();
 
     var it = self.blocks.iterator();
     while (it.next()) |entry| {
@@ -281,11 +295,6 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
         entry.value_ptr.*.print(self);
     }
     return error.TODO;
-    // try self.allocateTextSegment();
-    // try self.allocateDataConstSegment();
-    // try self.allocateDataSegment();
-    // self.allocateLinkeditSegment();
-    // try self.allocateSymbols();
     // try self.flush();
 }
 
@@ -1477,6 +1486,8 @@ fn resolveSymbols(self: *Zld) !void {
                     .references = std.AutoArrayHashMap(u32, void).init(self.allocator),
                     .code = code,
                     .relocs = std.ArrayList(Relocation).init(self.allocator),
+                    .rebases = std.ArrayList(u64).init(self.allocator),
+                    .tlv_offsets = std.ArrayList(u64).init(self.allocator),
                     .size = size,
                     .alignment = alignment,
                 };

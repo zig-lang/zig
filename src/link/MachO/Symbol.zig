@@ -58,8 +58,6 @@ pub const Regular = struct {
 
     local_sym_index: u32 = 0,
 
-    should_rebase: bool = false,
-
     pub const Linkage = enum {
         translation_unit,
         linkage_unit,
@@ -76,9 +74,6 @@ pub const Regular = struct {
         try std.fmt.format(writer, ".section_id = {}, ", .{self.section_id});
         if (self.weak_ref) {
             try std.fmt.format(writer, ".weak_ref, ", .{});
-        }
-        if (self.should_rebase) {
-            try std.fmt.format(writer, ".should_rebase, ", .{});
         }
         if (self.file) |file| {
             try std.fmt.format(writer, ".file = {s}, ", .{file.name.?});

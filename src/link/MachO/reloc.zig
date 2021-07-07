@@ -405,7 +405,7 @@ pub const Relocation = struct {
     pub fn resolve(self: Relocation, zld: *Zld) !void {
         const source_addr = blk: {
             const sym = zld.locals.items[self.block.local_sym_index];
-            break :blk sym.payload.regular.address;
+            break :blk sym.payload.regular.address + self.offset;
         };
         const target_addr = blk: {
             const is_via_got = inner: {
@@ -668,7 +668,17 @@ pub const Parser = struct {
 
                             break :rebase true;
                         };
-                        source_reg.should_rebase = should_rebase;
+
+                        if (should_rebase) {
+                            try self.block.rebases.append(out_rel.offset);
+                        }
+
+                        // TLV is handled via a separate offset mechanism.
+                        // Save the offset to the initializer.
+                        // TODO I believe this can be simplified a lot!
+                        if (sect_type == macho.S_THREAD_LOCAL_VARIABLES) {
+                            try self.block.tlv_offsets.append(out_rel.offset);
+                        }
                     },
                 }
             } else if (out_rel.payload == .branch) blk: {
