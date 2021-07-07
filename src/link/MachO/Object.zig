@@ -543,11 +543,13 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                         }
                     }
 
-                    if (zld.last_text_block) |last| {
-                        last.next = block;
-                        block.prev = last;
+                    if (zld.blocks.getPtr(match)) |last| {
+                        last.*.next = block;
+                        block.prev = last.*;
+                        last.* = block;
+                    } else {
+                        try zld.blocks.putNoClobber(zld.allocator, match, block);
                     }
-                    zld.last_text_block = block;
                 }
 
                 break :next;
@@ -607,11 +609,13 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                 mem.set(u8, block.code, 0);
             }
 
-            if (zld.last_text_block) |last| {
-                last.next = block;
-                block.prev = last;
+            if (zld.blocks.getPtr(match)) |last| {
+                last.*.next = block;
+                block.prev = last.*;
+                last.* = block;
+            } else {
+                try zld.blocks.putNoClobber(zld.allocator, match, block);
             }
-            zld.last_text_block = block;
         }
     }
 }

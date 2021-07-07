@@ -112,7 +112,7 @@ got_entries: std.ArrayListUnmanaged(*Symbol) = .{},
 
 stub_helper_stubs_start_off: ?u64 = null,
 
-last_text_block: ?*TextBlock = null,
+blocks: std.AutoHashMapUnmanaged(MatchingSection, *TextBlock) = .{},
 
 pub const Output = struct {
     tag: enum { exe, dylib },
@@ -225,6 +225,9 @@ pub fn deinit(self: *Zld) void {
 
     self.globals.deinit(self.allocator);
     self.strtab.deinit();
+
+    // TODO dealloc all blocks
+    self.blocks.deinit(self.allocator);
 }
 
 pub fn closeFiles(self: Zld) void {
@@ -268,6 +271,15 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     try self.addRpaths(args.rpaths);
     try self.addDataInCodeLC();
     try self.addCodeSignatureLC();
+
+    var it = self.blocks.iterator();
+    while (it.next()) |entry| {
+        const seg = self.load_commands.items[entry.key_ptr.seg].Segment;
+        const sect = seg.sections.items[entry.key_ptr.sect];
+
+        log.warn("\n\n{s},{s} contents:", .{ segmentName(sect), sectionName(sect) });
+        entry.value_ptr.*.print(self);
+    }
     return error.TODO;
     // try self.allocateTextSegment();
     // try self.allocateDataConstSegment();
@@ -834,6 +846,30 @@ fn sortSections(self: *Zld) !void {
             } else continue;
             maybe_index.* = new_index;
         }
+    }
+
+    {
+        var transient: std.AutoHashMapUnmanaged(MatchingSection, *TextBlock) = .{};
+        try transient.ensureCapacity(self.allocator, self.blocks.count());
+
+        var it = self.blocks.iterator();
+        while (it.next()) |entry| {
+            const old = entry.key_ptr.*;
+            const sect = if (old.seg == self.text_segment_cmd_index.?)
+                text_index_mapping.get(old.sect)
+            else if (old.seg == self.data_const_segment_cmd_index.?)
+                data_const_index_mapping.get(old.sect)
+            else
+                data_index_mapping.get(old.sect);
+            transient.putAssumeCapacityNoClobber(.{
+                .seg = old.seg,
+                .sect = old.sect,
+            }, entry.value_ptr.*);
+        }
+
+        self.blocks.clearAndFree(self.allocator);
+        self.blocks.deinit(self.allocator);
+        self.blocks = transient;
     }
 }
 
@@ -1403,13 +1439,19 @@ fn resolveSymbols(self: *Zld) !void {
                 try self.locals.append(self.allocator, symbol);
             },
             .tentative => |tent| {
-                if (self.common_section_index == null) {
-                    const data_seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-                    self.common_section_index = @intCast(u16, data_seg.sections.items.len);
-                    try data_seg.addSection(self.allocator, "__common", .{
-                        .flags = macho.S_ZEROFILL,
-                    });
-                }
+                const match: MatchingSection = blk: {
+                    if (self.common_section_index == null) {
+                        const data_seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
+                        self.common_section_index = @intCast(u16, data_seg.sections.items.len);
+                        try data_seg.addSection(self.allocator, "__common", .{
+                            .flags = macho.S_ZEROFILL,
+                        });
+                    }
+                    break :blk .{
+                        .seg = self.data_segment_cmd_index.?,
+                        .sect = self.common_section_index.?,
+                    };
+                };
 
                 const size = tent.size;
                 const code = try self.allocator.alloc(u8, size);
@@ -1439,13 +1481,13 @@ fn resolveSymbols(self: *Zld) !void {
                     .alignment = alignment,
                 };
 
-                // TODO I'm not 100% sure about this yet, but I believe we should keep a separate list of
-                // TextBlocks per segment.
-                if (self.last_text_block) |last| {
-                    last.next = block;
-                    block.prev = last;
+                if (self.blocks.getPtr(match)) |last| {
+                    last.*.next = block;
+                    block.prev = last.*;
+                    last.* = block;
+                } else {
+                    try self.blocks.putNoClobber(self.allocator, match, block);
                 }
-                self.last_text_block = block;
             },
             else => {},
         }
@@ -1526,10 +1568,6 @@ fn resolveSymbols(self: *Zld) !void {
 fn parseTextBlocks(self: *Zld) !void {
     for (self.objects.items) |object| {
         try object.parseTextBlocks(self);
-    }
-
-    if (self.last_text_block) |block| {
-        block.print(self);
     }
 }
 
