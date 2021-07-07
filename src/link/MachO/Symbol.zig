@@ -10,6 +10,7 @@ const Allocator = mem.Allocator;
 const Dylib = @import("Dylib.zig");
 const Object = @import("Object.zig");
 const StringTable = @import("StringTable.zig");
+const Zld = @import("Zld.zig");
 
 /// Symbol name. Owned slice.
 name: []const u8,
@@ -79,6 +80,20 @@ pub const Regular = struct {
             try std.fmt.format(writer, ".file = {s}, ", .{file.name.?});
         }
         try std.fmt.format(writer, "}}", .{});
+    }
+
+    pub fn sectionId(self: Regular, zld: *Zld) u8 {
+        // TODO there might be a more generic way of doing this.
+        var section: u8 = 0;
+        for (zld.load_commands.items) |cmd, cmd_id| {
+            if (cmd != .Segment) break;
+            if (cmd_id == self.segment_id) {
+                section += @intCast(u8, self.section_id) + 1;
+                break;
+            }
+            section += @intCast(u8, cmd.Segment.sections.items.len);
+        }
+        return section;
     }
 };
 

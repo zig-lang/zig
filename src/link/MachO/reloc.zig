@@ -674,10 +674,11 @@ pub const Parser = struct {
                         }
 
                         // TLV is handled via a separate offset mechanism.
-                        // Save the offset to the initializer.
-                        // TODO I believe this can be simplified a lot!
                         if (sect_type == macho.S_THREAD_LOCAL_VARIABLES) {
-                            try self.block.tlv_offsets.append(out_rel.offset);
+                            try self.block.tlv_offsets.append(.{
+                                .local_sym_index = out_rel.target.payload.regular.local_sym_index,
+                                .offset = out_rel.offset,
+                            });
                         }
                     },
                 }

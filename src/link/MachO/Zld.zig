@@ -129,9 +129,14 @@ pub const TextBlock = struct {
     size: u64,
     alignment: u32,
     rebases: std.ArrayList(u64),
-    tlv_offsets: std.ArrayList(u64),
+    tlv_offsets: std.ArrayList(TlvOffset),
     next: ?*TextBlock = null,
     prev: ?*TextBlock = null,
+
+    pub const TlvOffset = struct {
+        local_sym_index: u32,
+        offset: u64,
+    };
 
     pub fn deinit(block: *TextBlock, allocator: *Allocator) void {
         if (block.aliases) |aliases| {
@@ -281,10 +286,11 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     try self.addRpaths(args.rpaths);
     try self.addDataInCodeLC();
     try self.addCodeSignatureLC();
-    // try self.allocateTextSegment();
-    // try self.allocateDataConstSegment();
-    // try self.allocateDataSegment();
-    // self.allocateLinkeditSegment();
+    try self.allocateTextSegment();
+    try self.allocateDataConstSegment();
+    try self.allocateDataSegment();
+    self.allocateLinkeditSegment();
+    try self.allocateTextBlocks();
 
     var it = self.blocks.iterator();
     while (it.next()) |entry| {
@@ -292,6 +298,7 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
         const sect = seg.sections.items[entry.key_ptr.sect];
 
         log.warn("\n\n{s},{s} contents:", .{ segmentName(sect), sectionName(sect) });
+        log.warn("{}", .{sect});
         entry.value_ptr.*.print(self);
     }
     return error.TODO;
@@ -865,20 +872,32 @@ fn sortSections(self: *Zld) !void {
         while (it.next()) |entry| {
             const old = entry.key_ptr.*;
             const sect = if (old.seg == self.text_segment_cmd_index.?)
-                text_index_mapping.get(old.sect)
+                text_index_mapping.get(old.sect).?
             else if (old.seg == self.data_const_segment_cmd_index.?)
-                data_const_index_mapping.get(old.sect)
+                data_const_index_mapping.get(old.sect).?
             else
-                data_index_mapping.get(old.sect);
+                data_index_mapping.get(old.sect).?;
             transient.putAssumeCapacityNoClobber(.{
                 .seg = old.seg,
-                .sect = old.sect,
+                .sect = sect,
             }, entry.value_ptr.*);
         }
 
         self.blocks.clearAndFree(self.allocator);
         self.blocks.deinit(self.allocator);
         self.blocks = transient;
+    }
+
+    for (self.locals.items) |sym, i| {
+        if (i == 0) continue; // skip the null symbol
+        assert(sym.payload == .regular);
+        const reg = &sym.payload.regular;
+        reg.section_id = if (reg.segment_id == self.text_segment_cmd_index.?)
+            text_index_mapping.get(reg.section_id).?
+        else if (reg.segment_id == self.data_const_segment_cmd_index.?)
+            data_const_index_mapping.get(reg.section_id).?
+        else
+            data_index_mapping.get(reg.section_id).?;
     }
 }
 
@@ -991,50 +1010,26 @@ fn allocateSegment(self: *Zld, index: u16, offset: u64) !void {
     seg.inner.vmsize = seg_size_aligned;
 }
 
-fn allocateSymbol(self: *Zld, symbol: *Symbol) !void {
-    const reg = &symbol.payload.regular;
-    const object = reg.file orelse return;
-    const source_sect = &object.sections.items[reg.section];
-    const target_map = source_sect.target_map orelse {
-        log.debug("section '{s},{s}' not mapped for symbol '{s}'", .{
-            segmentName(source_sect.inner),
-            sectionName(source_sect.inner),
-            symbol.name,
-        });
-        return;
-    };
+fn allocateTextBlocks(self: *Zld) !void {
+    var it = self.blocks.iterator();
+    while (it.next()) |entry| {
+        const match = entry.key_ptr.*;
+        var block: *TextBlock = entry.value_ptr.*;
 
-    const target_seg = self.load_commands.items[target_map.segment_id].Segment;
-    const target_sect = target_seg.sections.items[target_map.section_id];
-    const target_addr = target_sect.addr + target_map.offset;
-    const address = reg.address - source_sect.inner.addr + target_addr;
+        const seg = self.load_commands.items[match.seg].Segment;
+        const sect = seg.sections.items[match.sect];
+        var base_addr: u64 = sect.addr + sect.size;
 
-    log.debug("resolving symbol '{s}' at 0x{x}", .{ symbol.name, address });
+        while (true) {
+            const sym = self.locals.items[block.local_sym_index];
+            assert(sym.payload == .regular);
+            sym.payload.regular.address = base_addr - block.size;
+            base_addr -= block.size;
 
-    // TODO there might be a more generic way of doing this.
-    var section: u8 = 0;
-    for (self.load_commands.items) |cmd, cmd_id| {
-        if (cmd != .Segment) break;
-        if (cmd_id == target_map.segment_id) {
-            section += @intCast(u8, target_map.section_id) + 1;
-            break;
+            if (block.prev) |prev| {
+                block = prev;
+            } else break;
         }
-        section += @intCast(u8, cmd.Segment.sections.items.len);
-    }
-
-    reg.address = address;
-    reg.section = section;
-}
-
-fn allocateSymbols(self: *Zld) !void {
-    for (self.locals.items) |symbol| {
-        if (symbol.payload != .regular) continue;
-        try self.allocateSymbol(symbol);
-    }
-
-    for (self.globals.values()) |symbol| {
-        if (symbol.payload != .regular) continue;
-        try self.allocateSymbol(symbol);
     }
 }
 
@@ -1487,7 +1482,7 @@ fn resolveSymbols(self: *Zld) !void {
                     .code = code,
                     .relocs = std.ArrayList(Relocation).init(self.allocator),
                     .rebases = std.ArrayList(u64).init(self.allocator),
-                    .tlv_offsets = std.ArrayList(u64).init(self.allocator),
+                    .tlv_offsets = std.ArrayList(TextBlock.TlvOffset).init(self.allocator),
                     .size = size,
                     .alignment = alignment,
                 };

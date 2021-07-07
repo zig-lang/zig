@@ -7,6 +7,7 @@ const fs = std.fs;
 const io = std.io;
 const log = std.log.scoped(.object);
 const macho = std.macho;
+const math = std.math;
 const mem = std.mem;
 const reloc = @import("reloc.zig");
 const sort = std.sort;
@@ -436,7 +437,7 @@ const TextBlockParser = struct {
             .code = try self.allocator.dupe(u8, code),
             .relocs = std.ArrayList(Relocation).init(self.allocator),
             .rebases = std.ArrayList(u64).init(self.allocator),
-            .tlv_offsets = std.ArrayList(u64).init(self.allocator),
+            .tlv_offsets = std.ArrayList(TextBlock.TlvOffset).init(self.allocator),
             .size = size,
             .alignment = self.section.@"align",
         };
@@ -533,6 +534,14 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                         }
                     }
 
+                    // Update target section's metadata
+                    // TODO should we update segment's size here too?
+                    // How does it tie with incremental space allocs?
+                    const tseg = &zld.load_commands.items[match.seg].Segment;
+                    const tsect = &tseg.sections.items[match.sect];
+                    tsect.size += block.size;
+                    tsect.@"align" = math.max(tsect.@"align", block.alignment);
+
                     if (zld.blocks.getPtr(match)) |last| {
                         last.*.next = block;
                         block.prev = last.*;
@@ -580,7 +589,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                 .code = try self.allocator.dupe(u8, code),
                 .relocs = std.ArrayList(Relocation).init(self.allocator),
                 .rebases = std.ArrayList(u64).init(self.allocator),
-                .tlv_offsets = std.ArrayList(u64).init(self.allocator),
+                .tlv_offsets = std.ArrayList(TextBlock.TlvOffset).init(self.allocator),
                 .size = sect.size,
                 .alignment = sect.@"align",
             };
@@ -588,6 +597,14 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
             if (relocs.len > 0) {
                 try self.parseRelocs(zld, relocs, block, 0);
             }
+
+            // Update target section's metadata
+            // TODO should we update segment's size here too?
+            // How does it tie with incremental space allocs?
+            const tseg = &zld.load_commands.items[match.seg].Segment;
+            const tsect = &tseg.sections.items[match.sect];
+            tsect.size += block.size;
+            tsect.@"align" = math.max(tsect.@"align", block.alignment);
 
             if (zld.blocks.getPtr(match)) |last| {
                 last.*.next = block;
