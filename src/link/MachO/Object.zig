@@ -48,8 +48,6 @@ dwarf_debug_ranges_index: ?u16 = null,
 
 symtab: std.ArrayListUnmanaged(macho.nlist_64) = .{},
 strtab: std.ArrayListUnmanaged(u8) = .{},
-
-initializers: std.ArrayListUnmanaged(u32) = .{},
 data_in_code_entries: std.ArrayListUnmanaged(macho.data_in_code_entry) = .{},
 
 symbols: std.ArrayListUnmanaged(*Symbol) = .{},
@@ -157,7 +155,6 @@ pub fn deinit(self: *Object) void {
     }
     self.load_commands.deinit(self.allocator);
     self.data_in_code_entries.deinit(self.allocator);
-    self.initializers.deinit(self.allocator);
     self.symtab.deinit(self.allocator);
     self.strtab.deinit(self.allocator);
     self.symbols.deinit(self.allocator);
@@ -573,6 +570,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
             symbol.payload = .{
                 .regular = .{
                     .linkage = .translation_unit,
+                    .address = sect.addr,
                     .segment_id = match.seg,
                     .section_id = match.sect,
                     .file = self,
@@ -657,6 +655,13 @@ pub fn symbolFromReloc(self: *Object, rel: macho.relocation_info) !*Symbol {
                 });
                 defer self.allocator.free(name);
                 const symbol = try Symbol.new(self.allocator, name);
+                symbol.payload = .{
+                    .regular = .{
+                        .linkage = .translation_unit,
+                        .address = sect.addr,
+                        .file = self,
+                    },
+                };
                 try self.sections_as_symbols.putNoClobber(self.allocator, sect_id, symbol);
                 break :symbol symbol;
             };
@@ -664,22 +669,6 @@ pub fn symbolFromReloc(self: *Object, rel: macho.relocation_info) !*Symbol {
         }
     };
     return symbol;
-}
-
-pub fn parseInitializers(self: *Object) !void {
-    const index = self.mod_init_func_section_index orelse return;
-    const section = self.sections.items[index];
-
-    log.debug("parsing initializers in {s}", .{self.name.?});
-
-    // Parse C++ initializers
-    const relocs = section.relocs orelse unreachable;
-    try self.initializers.ensureCapacity(self.allocator, relocs.len);
-    for (relocs) |rel| {
-        self.initializers.appendAssumeCapacity(rel.target.symbol);
-    }
-
-    mem.reverse(u32, self.initializers.items);
 }
 
 fn parseSymtab(self: *Object) !void {

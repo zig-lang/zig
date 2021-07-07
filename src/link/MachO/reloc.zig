@@ -48,33 +48,24 @@ pub const Relocation = struct {
         /// => * is unreachable
         is_64bit: bool,
 
+        source_sect_addr: ?u64 = null,
+
         pub fn resolve(self: Unsigned, base: Relocation, source_addr: u64, target_addr: u64) !void {
-            //     const addend = if (unsigned.base.target == .section)
-            //         unsigned.addend - @intCast(i64, args.source_target_sect_addr.?)
-            //     else
-            //         unsigned.addend;
+            const addend = if (self.source_sect_addr) |addr|
+                self.addend - addr
+            else
+                self.addend;
 
-            //     const result = if (args.subtractor) |subtractor|
-            //         @intCast(i64, args.target_addr) - @intCast(i64, subtractor) + addend
-            //     else
-            //         @intCast(i64, args.target_addr) + addend;
+            const result = if (self.subtractor) |subtractor|
+                @intCast(i64, target_addr) - @intCast(i64, subtractor.payload.regular.address) + addend
+            else
+                @intCast(i64, target_addr) + addend;
 
-            //     log.debug("    | calculated addend 0x{x}", .{addend});
-            //     log.debug("    | calculated unsigned value 0x{x}", .{result});
-
-            //     if (unsigned.is_64bit) {
-            //         mem.writeIntLittle(
-            //             u64,
-            //             unsigned.base.code[0..8],
-            //             @bitCast(u64, result),
-            //         );
-            //     } else {
-            //         mem.writeIntLittle(
-            //             u32,
-            //             unsigned.base.code[0..4],
-            //             @truncate(u32, @bitCast(u64, result)),
-            //         );
-            //     }
+            if (self.is_64bit) {
+                mem.writeIntLittle(u64, base.block.code[base.offset..][0..8], @bitCast(u64, result));
+            } else {
+                mem.writeIntLittle(u32, base.block.code[base.offset..][0..4], @truncate(u32, @bitCast(u64, result)));
+            }
         }
 
         pub fn format(self: Unsigned, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
@@ -191,56 +182,119 @@ pub const Relocation = struct {
         pub fn resolve(self: PageOff, base: Relocation, source_addr: u64, target_addr: u64) !void {
             switch (self.kind) {
                 .page => {
-                    //     const target_addr = if (page_off.addend) |addend| args.target_addr + addend else args.target_addr;
-                    //     const narrowed = @truncate(u12, target_addr);
+                    const actual_target_addr = if (self.addend) |addend| target_addr + addend else target_addr;
+                    const narrowed = @truncate(u12, actual_target_addr);
 
-                    //     log.debug("    | narrowed address within the page 0x{x}", .{narrowed});
-                    //     log.debug("    | {s} opcode", .{page_off.op_kind});
+                    const op_kind = self.op_kind orelse unreachable;
+                    var inst: aarch64.Instruction = blk: {
+                        switch (op_kind) {
+                            .arithmetic => {
+                                break :blk .{
+                                    .add_subtract_immediate = mem.bytesToValue(
+                                        meta.TagPayload(
+                                            aarch64.Instruction,
+                                            aarch64.Instruction.add_subtract_immediate,
+                                        ),
+                                        base.block.code[base.offset..][0..4],
+                                    ),
+                                };
+                            },
+                            .load => {
+                                break :blk .{
+                                    .load_store_register = mem.bytesToValue(
+                                        meta.TagPayload(
+                                            aarch64.Instruction,
+                                            aarch64.Instruction.load_store_register,
+                                        ),
+                                        base.block.code[base.offset..][0..4],
+                                    ),
+                                };
+                            },
+                        }
+                    };
 
-                    //     var inst = page_off.inst;
-                    //     if (page_off.op_kind == .arithmetic) {
-                    //         inst.add_subtract_immediate.imm12 = narrowed;
-                    //     } else {
-                    //         const offset: u12 = blk: {
-                    //             if (inst.load_store_register.size == 0) {
-                    //                 if (inst.load_store_register.v == 1) {
-                    //                     // 128-bit SIMD is scaled by 16.
-                    //                     break :blk try math.divExact(u12, narrowed, 16);
-                    //                 }
-                    //                 // Otherwise, 8-bit SIMD or ldrb.
-                    //                 break :blk narrowed;
-                    //             } else {
-                    //                 const denom: u4 = try math.powi(u4, 2, inst.load_store_register.size);
-                    //                 break :blk try math.divExact(u12, narrowed, denom);
-                    //             }
-                    //         };
-                    //         inst.load_store_register.offset = offset;
-                    //     }
+                    if (op_kind == .arithmetic) {
+                        inst.add_subtract_immediate.imm12 = narrowed;
+                    } else {
+                        const offset: u12 = blk: {
+                            if (inst.load_store_register.size == 0) {
+                                if (inst.load_store_register.v == 1) {
+                                    // 128-bit SIMD is scaled by 16.
+                                    break :blk try math.divExact(u12, narrowed, 16);
+                                }
+                                // Otherwise, 8-bit SIMD or ldrb.
+                                break :blk narrowed;
+                            } else {
+                                const denom: u4 = try math.powi(u4, 2, inst.load_store_register.size);
+                                break :blk try math.divExact(u12, narrowed, denom);
+                            }
+                        };
+                        inst.load_store_register.offset = offset;
+                    }
 
-                    //     mem.writeIntLittle(u32, page_off.base.code[0..4], inst.toU32());
-
+                    mem.writeIntLittle(u32, base.block.code[base.offset..][0..4], inst.toU32());
                 },
                 .got => {
-                    //     const narrowed = @truncate(u12, args.target_addr);
-
-                    //     log.debug("    | narrowed address within the page 0x{x}", .{narrowed});
-
-                    //     var inst = page_off.inst;
-                    //     const offset = try math.divExact(u12, narrowed, 8);
-                    //     inst.load_store_register.offset = offset;
-
-                    //     mem.writeIntLittle(u32, page_off.base.code[0..4], inst.toU32());
+                    const narrowed = @truncate(u12, target_addr);
+                    var inst = mem.bytesToValue(
+                        meta.TagPayload(
+                            aarch64.Instruction,
+                            aarch64.Instruction.load_store_register,
+                        ),
+                        base.block.code[base.offset..][0..4],
+                    );
+                    const offset = try math.divExact(u12, narrowed, 8);
+                    inst.load_store_register.offset = offset;
+                    mem.writeIntLittle(u32, base.block.code[base.offset..][0..4], inst.toU32());
                 },
                 .tlvp => {
-
-                    //     const narrowed = @truncate(u12, args.target_addr);
-
-                    //     log.debug("    | narrowed address within the page 0x{x}", .{narrowed});
-
-                    //     var inst = page_off.inst;
-                    //     inst.add_subtract_immediate.imm12 = narrowed;
-
-                    //     mem.writeIntLittle(u32, page_off.base.code[0..4], inst.toU32());
+                    const RegInfo = struct {
+                        rd: u5,
+                        rn: u5,
+                        size: u1,
+                    };
+                    const reg_info: RegInfo = blk: {
+                        if (isArithmeticOp(base.block.code[base.offset..][0..4])) {
+                            const inst = mem.bytesToValue(
+                                meta.TagPayload(
+                                    aarch64.Instruction,
+                                    aarch64.Instruction.add_subtract_immediate,
+                                ),
+                                base.block.code[base.offset..][0..4],
+                            );
+                            break :blk .{
+                                .rd = inst.rd,
+                                .rn = inst.rn,
+                                .size = inst.sf,
+                            };
+                        } else {
+                            const inst = mem.bytesToValue(
+                                meta.TagPayload(
+                                    aarch64.Instruction,
+                                    aarch64.Instruction.load_store_register,
+                                ),
+                                base.block.code[base.offset..][0..4],
+                            );
+                            break :blk .{
+                                .rd = inst.rt,
+                                .rn = inst.rn,
+                                .size = @truncate(u1, inst.size),
+                            };
+                        }
+                    };
+                    const narrowed = @truncate(u12, target_addr);
+                    var inst = aarch64.Instruction{
+                        .add_subtract_immediate = .{
+                            .rd = reg_info.rd,
+                            .rn = reg_info.rn,
+                            .imm12 = narrowed,
+                            .sh = 0,
+                            .s = 0,
+                            .op = 0,
+                            .sf = reg_info.size,
+                        },
+                    };
+                    mem.writeIntLittle(u32, base.block.code[base.offset..][0..4], inst.toU32());
                 },
             }
         }
@@ -661,12 +715,17 @@ pub const Parser = struct {
             mem.readIntLittle(i64, self.block.code[parsed.offset..][0..8])
         else
             mem.readIntLittle(i32, self.block.code[parsed.offset..][0..4]);
+        const source_sect_addr = if (rel.r_extern == 0) blk: {
+            if (parsed.target.payload == .regular) break :blk parsed.target.payload.regular.address;
+            break :blk null;
+        } else null;
 
         parsed.payload = .{
             .unsigned = .{
                 .subtractor = self.subtractor,
                 .is_64bit = is_64bit,
                 .addend = addend,
+                .source_sect_addr = source_sect_addr,
             },
         };
 

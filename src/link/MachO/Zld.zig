@@ -120,16 +120,6 @@ pub const Output = struct {
     install_name: ?[]const u8 = null,
 };
 
-const TlvOffset = struct {
-    source_addr: u64,
-    offset: u64,
-
-    fn cmp(context: void, a: TlvOffset, b: TlvOffset) bool {
-        _ = context;
-        return a.source_addr < b.source_addr;
-    }
-};
-
 pub const TextBlock = struct {
     local_sym_index: u32,
     aliases: ?[]u32 = null,
@@ -274,12 +264,11 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     try self.parseLibs(args.libs, args.syslibroot);
     try self.resolveSymbols();
     try self.parseTextBlocks();
+    try self.sortSections();
+    try self.addRpaths(args.rpaths);
+    try self.addDataInCodeLC();
+    try self.addCodeSignatureLC();
     return error.TODO;
-    // try self.updateMetadata();
-    // try self.sortSections();
-    // try self.addRpaths(args.rpaths);
-    // try self.addDataInCodeLC();
-    // try self.addCodeSignatureLC();
     // try self.allocateTextSegment();
     // try self.allocateDataConstSegment();
     // try self.allocateDataSegment();
@@ -340,106 +329,6 @@ fn parseLibs(self: *Zld, libs: []const []const u8, syslibroot: ?[]const u8) !voi
         }
 
         log.warn("unknown filetype for a library: '{s}'", .{lib});
-    }
-}
-
-fn mapAndUpdateSections(
-    self: *Zld,
-    object: *Object,
-    source_sect_id: u16,
-    target_seg_id: u16,
-    target_sect_id: u16,
-) !void {
-    const source_sect = &object.sections.items[source_sect_id];
-    const target_seg = &self.load_commands.items[target_seg_id].Segment;
-    const target_sect = &target_seg.sections.items[target_sect_id];
-
-    const alignment = try math.powi(u32, 2, target_sect.@"align");
-    const offset = mem.alignForwardGeneric(u64, target_sect.size, alignment);
-    const size = mem.alignForwardGeneric(u64, source_sect.inner.size, alignment);
-
-    log.debug("{s}: '{s},{s}' mapped to '{s},{s}' from 0x{x} to 0x{x}", .{
-        object.name.?,
-        segmentName(source_sect.inner),
-        sectionName(source_sect.inner),
-        segmentName(target_sect.*),
-        sectionName(target_sect.*),
-        offset,
-        offset + size,
-    });
-    log.debug("  | flags 0x{x}", .{source_sect.inner.flags});
-
-    source_sect.target_map = .{
-        .segment_id = target_seg_id,
-        .section_id = target_sect_id,
-        .offset = @intCast(u32, offset),
-    };
-    target_sect.size = offset + size;
-}
-
-fn updateMetadata(self: *Zld) !void {
-    for (self.objects.items) |object| {
-        // Find ideal section alignment and update section mappings
-        for (object.sections.items) |sect, sect_id| {
-            const match = (try self.getMatchingSection(sect.inner)) orelse {
-                log.debug("{s}: unhandled section type 0x{x} for '{s},{s}'", .{
-                    object.name.?,
-                    sect.inner.flags,
-                    segmentName(sect.inner),
-                    sectionName(sect.inner),
-                });
-                continue;
-            };
-            const target_seg = &self.load_commands.items[match.seg].Segment;
-            const target_sect = &target_seg.sections.items[match.sect];
-            target_sect.@"align" = math.max(target_sect.@"align", sect.inner.@"align");
-
-            try self.mapAndUpdateSections(object, @intCast(u16, sect_id), match.seg, match.sect);
-        }
-    }
-
-    tlv_align: {
-        const has_tlv =
-            self.tlv_section_index != null or
-            self.tlv_data_section_index != null or
-            self.tlv_bss_section_index != null;
-
-        if (!has_tlv) break :tlv_align;
-
-        const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-
-        if (self.tlv_section_index) |index| {
-            const sect = &seg.sections.items[index];
-            sect.@"align" = 3; // __thread_vars is always 8byte aligned
-        }
-
-        // Apparently __tlv_data and __tlv_bss need to have matching alignment, so fix it up.
-        // <rdar://problem/24221680> All __thread_data and __thread_bss sections must have same alignment
-        // https://github.com/apple-opensource/ld64/blob/e28c028b20af187a16a7161d89e91868a450cadc/src/ld/ld.cpp#L1172
-        const data_align: u32 = data: {
-            if (self.tlv_data_section_index) |index| {
-                const sect = &seg.sections.items[index];
-                break :data sect.@"align";
-            }
-            break :tlv_align;
-        };
-        const bss_align: u32 = bss: {
-            if (self.tlv_bss_section_index) |index| {
-                const sect = &seg.sections.items[index];
-                break :bss sect.@"align";
-            }
-            break :tlv_align;
-        };
-        const max_align = math.max(data_align, bss_align);
-
-        if (self.tlv_data_section_index) |index| {
-            const sect = &seg.sections.items[index];
-            sect.@"align" = max_align;
-        }
-        if (self.tlv_bss_section_index) |index| {
-            const sect = &seg.sections.items[index];
-            sect.@"align" = max_align;
-        }
     }
 }
 
@@ -946,36 +835,6 @@ fn sortSections(self: *Zld) !void {
             maybe_index.* = new_index;
         }
     }
-
-    for (self.objects.items) |object| {
-        for (object.sections.items) |*sect| {
-            const target_map = sect.target_map orelse continue;
-
-            const new_index = blk: {
-                if (self.text_segment_cmd_index.? == target_map.segment_id) {
-                    break :blk text_index_mapping.get(target_map.section_id) orelse unreachable;
-                } else if (self.data_const_segment_cmd_index.? == target_map.segment_id) {
-                    break :blk data_const_index_mapping.get(target_map.section_id) orelse unreachable;
-                } else if (self.data_segment_cmd_index.? == target_map.segment_id) {
-                    break :blk data_index_mapping.get(target_map.section_id) orelse unreachable;
-                } else unreachable;
-            };
-
-            log.debug("remapping in {s}: '{s},{s}': {} => {}", .{
-                object.name.?,
-                segmentName(sect.inner),
-                sectionName(sect.inner),
-                target_map.section_id,
-                new_index,
-            });
-
-            sect.target_map = .{
-                .segment_id = target_map.segment_id,
-                .section_id = new_index,
-                .offset = target_map.offset,
-            };
-        }
-    }
 }
 
 fn allocateTextSegment(self: *Zld) !void {
@@ -1431,6 +1290,7 @@ fn resolveSymbolsInObject(self: *Zld, object: *Object) !void {
             symbol.payload = .{
                 .regular = .{
                     .linkage = .translation_unit,
+                    .address = sym.n_value,
                     .weak_ref = Symbol.isWeakRef(sym),
                     .file = object,
                     .local_sym_index = @intCast(u32, self.locals.items.len),
@@ -1470,6 +1330,7 @@ fn resolveSymbolsInObject(self: *Zld, object: *Object) !void {
                 symbol.payload = .{
                     .regular = .{
                         .linkage = linkage,
+                        .address = sym.n_value,
                         .weak_ref = Symbol.isWeakRef(sym),
                         .file = object,
                     },
@@ -1669,80 +1530,6 @@ fn parseTextBlocks(self: *Zld) !void {
 
     if (self.last_text_block) |block| {
         block.print(self);
-    }
-}
-
-fn resolveRelocsAndWriteSections(self: *Zld) !void {
-    for (self.objects.items) |object| {
-        log.debug("relocating object {s}", .{object.name});
-
-        for (object.sections.items) |sect| {
-            if (sectionType(sect.inner) == macho.S_MOD_INIT_FUNC_POINTERS or
-                sectionType(sect.inner) == macho.S_MOD_TERM_FUNC_POINTERS) continue;
-
-            const segname = segmentName(sect.inner);
-            const sectname = sectionName(sect.inner);
-
-            log.debug("relocating section '{s},{s}'", .{ segname, sectname });
-
-            // Get target mapping
-            const target_map = sect.target_map orelse {
-                log.debug("no mapping for '{s},{s}'; skipping", .{ segname, sectname });
-                continue;
-            };
-            const target_seg = self.load_commands.items[target_map.segment_id].Segment;
-            const target_sect = target_seg.sections.items[target_map.section_id];
-            const target_sect_addr = target_sect.addr + target_map.offset;
-            const target_sect_off = target_sect.offset + target_map.offset;
-
-            if (sect.relocs) |relocs| {
-                for (relocs) |rel| {
-                    const source_addr = target_sect_addr + rel.offset;
-
-                    var args: reloc.Relocation.ResolveArgs = .{
-                        .source_addr = source_addr,
-                        .target_addr = undefined,
-                    };
-
-                    switch (rel.@"type") {
-                        .unsigned => {
-                            args.target_addr = try self.relocTargetAddr(object, rel.target);
-
-                            const unsigned = rel.cast(reloc.Unsigned) orelse unreachable;
-                            if (unsigned.subtractor) |subtractor| {
-                                args.subtractor = try self.relocTargetAddr(object, subtractor);
-                            }
-                            if (rel.target == .section) {
-                                const source_sect = object.sections.items[rel.target.section];
-                                args.source_source_sect_addr = sect.inner.addr;
-                                args.source_target_sect_addr = source_sect.inner.addr;
-                            }
-                        },
-                        .got_page, .got_page_off, .got_load, .got, .pointer_to_got => {
-                            const dc_seg = self.load_commands.items[self.data_const_segment_cmd_index.?].Segment;
-                            const got = dc_seg.sections.items[self.got_section_index.?];
-                            const sym = object.symbols.items[rel.target.symbol];
-                            const got_index = sym.got_index orelse {
-                                log.err("expected GOT index relocating symbol '{s}'", .{sym.name});
-                                log.err("this is an internal linker error", .{});
-                                return error.FailedToResolveRelocationTarget;
-                            };
-                            args.target_addr = got.addr + got_index * @sizeOf(u64);
-                        },
-                        else => |tt| {
-                            if (tt == .signed and rel.target == .section) {
-                                const source_sect = object.sections.items[rel.target.section];
-                                args.source_source_sect_addr = sect.inner.addr;
-                                args.source_target_sect_addr = source_sect.inner.addr;
-                            }
-                            args.target_addr = try self.relocTargetAddr(object, rel.target);
-                        },
-                    }
-
-                    try rel.resolve(args);
-                }
-            }
-        }
     }
 }
 
