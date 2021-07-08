@@ -52,7 +52,7 @@ pub const Relocation = struct {
 
         pub fn resolve(self: Unsigned, base: Relocation, source_addr: u64, target_addr: u64) !void {
             const addend = if (self.source_sect_addr) |addr|
-                self.addend - addr
+                self.addend - @intCast(i64, addr)
             else
                 self.addend;
 
@@ -86,13 +86,13 @@ pub const Relocation = struct {
         arch: Arch,
 
         pub fn resolve(self: Branch, base: Relocation, source_addr: u64, target_addr: u64) !void {
-            switch (arch) {
+            switch (self.arch) {
                 .aarch64 => {
                     const displacement = try math.cast(i28, @intCast(i64, target_addr) - @intCast(i64, source_addr));
                     var inst = aarch64.Instruction{
                         .unconditional_branch_immediate = mem.bytesToValue(
                             meta.TagPayload(
-                                aarch.Instruction,
+                                aarch64.Instruction,
                                 aarch64.Instruction.unconditional_branch_immediate,
                             ),
                             base.block.code[base.offset..][0..4],
@@ -236,13 +236,15 @@ pub const Relocation = struct {
                 },
                 .got => {
                     const narrowed = @truncate(u12, target_addr);
-                    var inst = mem.bytesToValue(
-                        meta.TagPayload(
-                            aarch64.Instruction,
-                            aarch64.Instruction.load_store_register,
+                    var inst: aarch64.Instruction = .{
+                        .load_store_register = mem.bytesToValue(
+                            meta.TagPayload(
+                                aarch64.Instruction,
+                                aarch64.Instruction.load_store_register,
+                            ),
+                            base.block.code[base.offset..][0..4],
                         ),
-                        base.block.code[base.offset..][0..4],
-                    );
+                    };
                     const offset = try math.divExact(u12, narrowed, 8);
                     inst.load_store_register.offset = offset;
                     mem.writeIntLittle(u32, base.block.code[base.offset..][0..4], inst.toU32());
@@ -408,14 +410,12 @@ pub const Relocation = struct {
             break :blk sym.payload.regular.address + self.offset;
         };
         const target_addr = blk: {
-            const is_via_got = inner: {
-                switch (self.payload) {
-                    .pointer_to_got => break :inner true,
-                    .page => |page| page.kind == .got,
-                    .page_off => |page_off| page_off == .got,
-                    .load => {},
-                    else => break :inner false,
-                }
+            const is_via_got = switch (self.payload) {
+                .pointer_to_got => true,
+                .page => |page| page.kind == .got,
+                .page_off => |page_off| page_off.kind == .got,
+                .load => |load| load.kind == .got,
+                else => false,
             };
 
             if (is_via_got) {
@@ -459,6 +459,11 @@ pub const Relocation = struct {
                 },
             }
         };
+
+        log.warn("relocating {}", .{self});
+        log.warn("  | source_addr = 0x{x}", .{source_addr});
+        log.warn("  | target_addr = 0x{x}", .{target_addr});
+
         switch (self.payload) {
             .unsigned => |unsigned| try unsigned.resolve(self, source_addr, target_addr),
             .branch => |branch| try branch.resolve(self, source_addr, target_addr),

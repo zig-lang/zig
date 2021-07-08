@@ -173,6 +173,12 @@ pub const TextBlock = struct {
         self.tlv_offsets.deinit();
     }
 
+    pub fn resolveRelocs(self: *TextBlock, zld: *Zld) !void {
+        for (self.relocs.items) |rel| {
+            try rel.resolve(zld);
+        }
+    }
+
     pub fn print_this(self: *const TextBlock, zld: *Zld) void {
         log.warn("TextBlock", .{});
         log.warn("  | {}: {}", .{ self.local_sym_index, zld.locals.items[self.local_sym_index] });
@@ -328,11 +334,10 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
         const sect = seg.sections.items[entry.key_ptr.sect];
 
         log.warn("\n\n{s},{s} contents:", .{ segmentName(sect), sectionName(sect) });
-        log.warn("{}", .{sect});
+        log.warn("  {}", .{sect});
         entry.value_ptr.*.print(self);
     }
-    return error.TODO;
-    // try self.flush();
+    try self.flush();
 }
 
 fn parseInputFiles(self: *Zld, files: []const []const u8, syslibroot: ?[]const u8) !void {
@@ -1041,6 +1046,8 @@ fn allocateSegment(self: *Zld, index: u16, offset: u64) !void {
 }
 
 fn allocateTextBlocks(self: *Zld) !void {
+    log.warn("allocating text blocks", .{});
+
     var it = self.blocks.iterator();
     while (it.next()) |entry| {
         const match = entry.key_ptr.*;
@@ -1050,12 +1057,33 @@ fn allocateTextBlocks(self: *Zld) !void {
         const sect = seg.sections.items[match.sect];
         var base_addr: u64 = sect.addr + sect.size;
 
+        log.warn("  within section {s},{s}", .{ segmentName(sect), sectionName(sect) });
+        log.warn("    {}", .{sect});
+
         while (true) {
-            base_addr -= block.size;
+            const block_alignment = try math.powi(u32, 2, block.alignment);
+            base_addr = mem.alignBackwardGeneric(u64, base_addr - block.size, block_alignment);
 
             const sym = self.locals.items[block.local_sym_index];
             assert(sym.payload == .regular);
             sym.payload.regular.address = base_addr;
+
+            log.warn("  {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
+                sym.name,
+                base_addr,
+                base_addr + block.size,
+                block.size,
+                block.alignment,
+            });
+
+            // Update each alias (if any)
+            if (block.aliases) |aliases| {
+                for (aliases) |index| {
+                    const alias_sym = self.locals.items[index];
+                    assert(alias_sym.payload == .regular);
+                    alias_sym.payload.regular.address = base_addr;
+                }
+            }
 
             // Update each symbol contained within the TextBlock
             if (block.contained) |contained| {
@@ -1070,6 +1098,37 @@ fn allocateTextBlocks(self: *Zld) !void {
                 block = prev;
             } else break;
         }
+    }
+}
+
+fn writeTextBlocks(self: *Zld) !void {
+    var it = self.blocks.iterator();
+    while (it.next()) |entry| {
+        const match = entry.key_ptr.*;
+        var block: *TextBlock = entry.value_ptr.*;
+
+        const seg = self.load_commands.items[match.seg].Segment;
+        const sect = seg.sections.items[match.sect];
+
+        log.warn("writing text blocks for section {s},{s}", .{ segmentName(sect), sectionName(sect) });
+
+        var code = try self.allocator.alloc(u8, sect.size);
+        defer self.allocator.free(code);
+
+        var base_off: u64 = sect.size;
+
+        while (true) {
+            base_off -= block.size;
+
+            try block.resolveRelocs(self);
+            mem.copy(u8, code[base_off..][0..block.size], block.code);
+
+            if (block.prev) |prev| {
+                block = prev;
+            } else break;
+        }
+
+        try self.file.?.pwriteAll(code, sect.offset);
     }
 }
 
@@ -1941,104 +2000,105 @@ fn addRpaths(self: *Zld, rpaths: []const []const u8) !void {
 }
 
 fn flush(self: *Zld) !void {
-    try self.writeStubHelperCommon();
+    try self.writeTextBlocks();
+    // try self.writeStubHelperCommon();
 
-    if (self.common_section_index) |index| {
-        const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-        const sect = &seg.sections.items[index];
-        sect.offset = 0;
-    }
+    // if (self.common_section_index) |index| {
+    //     const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
+    //     const sect = &seg.sections.items[index];
+    //     sect.offset = 0;
+    // }
 
-    if (self.bss_section_index) |index| {
-        const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-        const sect = &seg.sections.items[index];
-        sect.offset = 0;
-    }
+    // if (self.bss_section_index) |index| {
+    //     const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
+    //     const sect = &seg.sections.items[index];
+    //     sect.offset = 0;
+    // }
 
-    if (self.tlv_bss_section_index) |index| {
-        const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-        const sect = &seg.sections.items[index];
-        sect.offset = 0;
-    }
+    // if (self.tlv_bss_section_index) |index| {
+    //     const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
+    //     const sect = &seg.sections.items[index];
+    //     sect.offset = 0;
+    // }
 
-    if (self.tlv_section_index) |index| {
-        const seg = self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-        const sect = &seg.sections.items[index];
+    // if (self.tlv_section_index) |index| {
+    //     const seg = self.load_commands.items[self.data_segment_cmd_index.?].Segment;
+    //     const sect = &seg.sections.items[index];
 
-        var buffer = try self.allocator.alloc(u8, @intCast(usize, sect.size));
-        defer self.allocator.free(buffer);
-        _ = try self.file.?.preadAll(buffer, sect.offset);
+    //     var buffer = try self.allocator.alloc(u8, @intCast(usize, sect.size));
+    //     defer self.allocator.free(buffer);
+    //     _ = try self.file.?.preadAll(buffer, sect.offset);
 
-        var stream = std.io.fixedBufferStream(buffer);
-        var writer = stream.writer();
+    //     var stream = std.io.fixedBufferStream(buffer);
+    //     var writer = stream.writer();
 
-        std.sort.sort(TlvOffset, self.threadlocal_offsets.items, {}, TlvOffset.cmp);
+    //     std.sort.sort(TlvOffset, self.threadlocal_offsets.items, {}, TlvOffset.cmp);
 
-        const seek_amt = 2 * @sizeOf(u64);
-        for (self.threadlocal_offsets.items) |tlv| {
-            try writer.context.seekBy(seek_amt);
-            try writer.writeIntLittle(u64, tlv.offset);
-        }
+    //     const seek_amt = 2 * @sizeOf(u64);
+    //     for (self.threadlocal_offsets.items) |tlv| {
+    //         try writer.context.seekBy(seek_amt);
+    //         try writer.writeIntLittle(u64, tlv.offset);
+    //     }
 
-        try self.file.?.pwriteAll(buffer, sect.offset);
-    }
+    //     try self.file.?.pwriteAll(buffer, sect.offset);
+    // }
 
-    if (self.mod_init_func_section_index) |index| {
-        const seg = self.load_commands.items[self.data_const_segment_cmd_index.?].Segment;
-        const sect = &seg.sections.items[index];
+    // if (self.mod_init_func_section_index) |index| {
+    //     const seg = self.load_commands.items[self.data_const_segment_cmd_index.?].Segment;
+    //     const sect = &seg.sections.items[index];
 
-        var initializers = std.ArrayList(u64).init(self.allocator);
-        defer initializers.deinit();
+    //     var initializers = std.ArrayList(u64).init(self.allocator);
+    //     defer initializers.deinit();
 
-        for (self.objects.items) |object| {
-            for (object.initializers.items) |sym_id| {
-                const address = object.symbols.items[sym_id].payload.regular.address;
-                try initializers.append(address);
-            }
-        }
+    //     for (self.objects.items) |object| {
+    //         for (object.initializers.items) |sym_id| {
+    //             const address = object.symbols.items[sym_id].payload.regular.address;
+    //             try initializers.append(address);
+    //         }
+    //     }
 
-        _ = try self.file.?.pwriteAll(mem.sliceAsBytes(initializers.items), sect.offset);
-        sect.size = @intCast(u32, initializers.items.len * @sizeOf(u64));
-    }
+    //     _ = try self.file.?.pwriteAll(mem.sliceAsBytes(initializers.items), sect.offset);
+    //     sect.size = @intCast(u32, initializers.items.len * @sizeOf(u64));
+    // }
 
-    try self.writeGotEntries();
-    try self.setEntryPoint();
-    try self.writeRebaseInfoTable();
-    try self.writeBindInfoTable();
-    try self.writeLazyBindInfoTable();
-    try self.writeExportInfo();
-    try self.writeDataInCode();
+    // try self.writeGotEntries();
+    // try self.setEntryPoint();
+    // try self.writeRebaseInfoTable();
+    // try self.writeBindInfoTable();
+    // try self.writeLazyBindInfoTable();
+    // try self.writeExportInfo();
+    // try self.writeDataInCode();
 
-    {
-        const seg = &self.load_commands.items[self.linkedit_segment_cmd_index.?].Segment;
-        const symtab = &self.load_commands.items[self.symtab_cmd_index.?].Symtab;
-        symtab.symoff = @intCast(u32, seg.inner.fileoff + seg.inner.filesize);
-    }
+    // {
+    //     const seg = &self.load_commands.items[self.linkedit_segment_cmd_index.?].Segment;
+    //     const symtab = &self.load_commands.items[self.symtab_cmd_index.?].Symtab;
+    //     symtab.symoff = @intCast(u32, seg.inner.fileoff + seg.inner.filesize);
+    // }
 
-    try self.writeSymbolTable();
-    try self.writeStringTable();
+    // try self.writeSymbolTable();
+    // try self.writeStringTable();
 
-    {
-        // Seal __LINKEDIT size
-        const seg = &self.load_commands.items[self.linkedit_segment_cmd_index.?].Segment;
-        seg.inner.vmsize = mem.alignForwardGeneric(u64, seg.inner.filesize, self.page_size.?);
-    }
+    // {
+    //     // Seal __LINKEDIT size
+    //     const seg = &self.load_commands.items[self.linkedit_segment_cmd_index.?].Segment;
+    //     seg.inner.vmsize = mem.alignForwardGeneric(u64, seg.inner.filesize, self.page_size.?);
+    // }
 
-    if (self.target.?.cpu.arch == .aarch64) {
-        try self.writeCodeSignaturePadding();
-    }
+    // if (self.target.?.cpu.arch == .aarch64) {
+    //     try self.writeCodeSignaturePadding();
+    // }
 
-    try self.writeLoadCommands();
-    try self.writeHeader();
+    // try self.writeLoadCommands();
+    // try self.writeHeader();
 
-    if (self.target.?.cpu.arch == .aarch64) {
-        try self.writeCodeSignature();
-    }
+    // if (self.target.?.cpu.arch == .aarch64) {
+    //     try self.writeCodeSignature();
+    // }
 
-    if (comptime std.Target.current.isDarwin() and std.Target.current.cpu.arch == .aarch64) {
-        const out_path = self.output.?.path;
-        try fs.cwd().copyFile(out_path, fs.cwd(), out_path, .{});
-    }
+    // if (comptime std.Target.current.isDarwin() and std.Target.current.cpu.arch == .aarch64) {
+    //     const out_path = self.output.?.path;
+    //     try fs.cwd().copyFile(out_path, fs.cwd(), out_path, .{});
+    // }
 }
 
 fn writeGotEntries(self: *Zld) !void {

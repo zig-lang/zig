@@ -535,8 +535,11 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                     // How does it tie with incremental space allocs?
                     const tseg = &zld.load_commands.items[match.seg].Segment;
                     const tsect = &tseg.sections.items[match.sect];
-                    tsect.size += block.size;
-                    tsect.@"align" = math.max(tsect.@"align", block.alignment);
+                    const new_alignment = math.max(tsect.@"align", block.alignment);
+                    const new_alignment_pow_2 = try math.powi(u32, 2, new_alignment);
+                    const new_size = mem.alignForwardGeneric(u64, tsect.size + block.size, new_alignment_pow_2);
+                    tsect.size = new_size;
+                    tsect.@"align" = new_alignment;
 
                     if (zld.blocks.getPtr(match)) |last| {
                         last.*.next = block;
@@ -621,8 +624,11 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
             // How does it tie with incremental space allocs?
             const tseg = &zld.load_commands.items[match.seg].Segment;
             const tsect = &tseg.sections.items[match.sect];
-            tsect.size += block.size;
-            tsect.@"align" = math.max(tsect.@"align", block.alignment);
+            const new_alignment = math.max(tsect.@"align", block.alignment);
+            const new_alignment_pow_2 = try math.powi(u32, 2, new_alignment);
+            const new_size = mem.alignForwardGeneric(u64, tsect.size + block.size, new_alignment_pow_2);
+            tsect.size = new_size;
+            tsect.@"align" = new_alignment;
 
             if (zld.blocks.getPtr(match)) |last| {
                 last.*.next = block;
