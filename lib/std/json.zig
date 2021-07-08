@@ -1532,7 +1532,13 @@ test "skipValue" {
     }
 }
 
-fn ParseInternalError(comptime T: type, comptime inferred_types: []const type) type {
+fn ParseInternalError(comptime T: type) type {
+    // `inferred_types` is used to avoid infinite recursion for recursive type definitions.
+    const inferred_types = [_]type{};
+    return ParseInternalErrorImpl(T, &inferred_types);
+}
+
+fn ParseInternalErrorImpl(comptime T: type, comptime inferred_types: []const type) type {
     for (inferred_types) |ty| {
         if (T == ty) return error{};
     }
@@ -1544,14 +1550,14 @@ fn ParseInternalError(comptime T: type, comptime inferred_types: []const type) t
         .Int, .ComptimeInt => return error{ UnexpectedToken, InvalidNumber, Overflow, InvalidCharacter } ||
             std.fmt.ParseIntError || std.fmt.ParseFloatError,
         .Optional => |optionalInfo| {
-            return ParseInternalError(optionalInfo.child, inferred_types ++ [_]type{T});
+            return ParseInternalErrorImpl(optionalInfo.child, inferred_types ++ [_]type{T});
         },
         .Enum => return error{UnexpectedToken} || std.fmt.ParseIntError || std.meta.IntToEnumError,
         .Union => |unionInfo| {
             if (unionInfo.tag_type) |_| {
                 var errors = error{NoUnionMembersMatched};
                 for (unionInfo.fields) |u_field| {
-                    errors = errors || ParseInternalError(u_field.field_type, inferred_types ++ [_]type{T});
+                    errors = errors || ParseInternalErrorImpl(u_field.field_type, inferred_types ++ [_]type{T});
                 }
                 return errors;
             } else {
@@ -1568,7 +1574,7 @@ fn ParseInternalError(comptime T: type, comptime inferred_types: []const type) t
                 MissingField,
             } || SkipValueError;
             for (structInfo.fields) |field| {
-                errors = errors || ParseInternalError(field.field_type, inferred_types ++ [_]type{T});
+                errors = errors || ParseInternalErrorImpl(field.field_type, inferred_types ++ [_]type{T});
             }
             return errors;
         },
@@ -1576,7 +1582,7 @@ fn ParseInternalError(comptime T: type, comptime inferred_types: []const type) t
             return error{
                 UnexpectedEndOfJson,
                 UnexpectedToken,
-            } || TokenStream.Error || ParseInternalError(arrayInfo.child, inferred_types ++ [_]type{T}) ||
+            } || TokenStream.Error || ParseInternalErrorImpl(arrayInfo.child, inferred_types ++ [_]type{T}) ||
                 UnescapeValidStringError;
         },
         .Pointer => |ptrInfo| {
@@ -1584,11 +1590,11 @@ fn ParseInternalError(comptime T: type, comptime inferred_types: []const type) t
 
             switch (ptrInfo.size) {
                 .One => {
-                    return errors || ParseInternalError(ptrInfo.child, inferred_types ++ [_]type{T});
+                    return errors || ParseInternalErrorImpl(ptrInfo.child, inferred_types ++ [_]type{T});
                 },
                 .Slice => {
                     return errors || error{ UnexpectedEndOfJson, UnexpectedToken } || TokenStream.Error ||
-                        ParseInternalError(ptrInfo.child, inferred_types ++ [_]type{T}) ||
+                        ParseInternalErrorImpl(ptrInfo.child, inferred_types ++ [_]type{T}) ||
                         UnescapeValidStringError;
                 },
                 else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
@@ -1599,14 +1605,12 @@ fn ParseInternalError(comptime T: type, comptime inferred_types: []const type) t
     unreachable;
 }
 
-const parse_internal_inferred_types = [_]type{};
-
 fn parseInternal(
     comptime T: type,
     token: Token,
     tokens: *TokenStream,
     options: ParseOptions,
-) ParseInternalError(T, std.mem.span(&parse_internal_inferred_types))!T {
+) ParseInternalError(T)!T {
     switch (@typeInfo(T)) {
         .Bool => {
             return switch (token) {
