@@ -430,17 +430,12 @@ const TextBlockParser = struct {
         const block = try self.allocator.create(TextBlock);
         errdefer self.allocator.destroy(block);
 
-        block.* = .{
-            .local_sym_index = senior_nlist.index,
-            .aliases = alias_only_indices,
-            .references = std.AutoArrayHashMap(u32, void).init(self.allocator),
-            .code = try self.allocator.dupe(u8, code),
-            .relocs = std.ArrayList(Relocation).init(self.allocator),
-            .rebases = std.ArrayList(u64).init(self.allocator),
-            .tlv_offsets = std.ArrayList(TextBlock.TlvOffset).init(self.allocator),
-            .size = size,
-            .alignment = self.section.@"align",
-        };
+        block.* = TextBlock.init(self.allocator);
+        block.local_sym_index = senior_nlist.index;
+        block.aliases = alias_only_indices;
+        block.code = try self.allocator.dupe(u8, code);
+        block.size = size;
+        block.alignment = self.section.@"align";
 
         const relocs = filterRelocs(self.relocs, start_addr, end_addr);
         if (relocs.len > 0) {
@@ -499,16 +494,17 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
         _ = try self.file.?.preadAll(raw_relocs, sect.reloff);
         const relocs = mem.bytesAsSlice(macho.relocation_info, raw_relocs);
 
+        // Symbols within this section only.
+        const filtered_nlists = NlistWithIndex.filterInSection(
+            sorted_nlists.items,
+            sect_id + 1,
+        );
+
         // Is there any padding between symbols within the section?
         const is_splittable = self.header.?.flags & macho.MH_SUBSECTIONS_VIA_SYMBOLS != 0;
 
         next: {
             if (is_splittable) blocks: {
-                const filtered_nlists = NlistWithIndex.filterInSection(
-                    sorted_nlists.items,
-                    sect_id + 1,
-                );
-
                 if (filtered_nlists.len == 0) break :blocks;
 
                 var parser = TextBlockParser{
@@ -528,7 +524,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                     if (reg.file) |file| {
                         if (file != self) {
                             log.warn("deduping definition of {s} in {s}", .{ sym.name, self.name.? });
-                            block.deinit(self.allocator);
+                            block.deinit();
                             self.allocator.destroy(block);
                             continue;
                         }
@@ -583,19 +579,41 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
             const block = try self.allocator.create(TextBlock);
             errdefer self.allocator.destroy(block);
 
-            block.* = .{
-                .local_sym_index = local_sym_index,
-                .references = std.AutoArrayHashMap(u32, void).init(self.allocator),
-                .code = try self.allocator.dupe(u8, code),
-                .relocs = std.ArrayList(Relocation).init(self.allocator),
-                .rebases = std.ArrayList(u64).init(self.allocator),
-                .tlv_offsets = std.ArrayList(TextBlock.TlvOffset).init(self.allocator),
-                .size = sect.size,
-                .alignment = sect.@"align",
-            };
+            block.* = TextBlock.init(self.allocator);
+            block.local_sym_index = local_sym_index;
+            block.code = try self.allocator.dupe(u8, code);
+            block.size = sect.size;
+            block.alignment = sect.@"align";
 
             if (relocs.len > 0) {
                 try self.parseRelocs(zld, relocs, block, 0);
+            }
+
+            // Since this is block gets a helper local temporary symbol that didn't exist
+            // in the object file which encompasses the entire section, we need traverse
+            // the filtered symbols and note which symbol is contained within so that
+            // we can properly allocate addresses down the line.
+            // While we're at it, we need to update segment,section mapping of each symbol too.
+            if (filtered_nlists.len > 0) {
+                var contained = std.ArrayList(TextBlock.SymbolAtOffset).init(self.allocator);
+                defer contained.deinit();
+                try contained.ensureTotalCapacity(filtered_nlists.len);
+
+                for (filtered_nlists) |nlist_with_index| {
+                    const sym = self.symbols.items[nlist_with_index.index];
+                    assert(sym.payload == .regular);
+                    const reg = &sym.payload.regular;
+
+                    reg.segment_id = match.seg;
+                    reg.section_id = match.sect;
+
+                    contained.appendAssumeCapacity(.{
+                        .local_sym_index = reg.local_sym_index,
+                        .offset = nlist_with_index.nlist.n_value - sect.addr,
+                    });
+                }
+
+                block.contained = contained.toOwnedSlice();
             }
 
             // Update target section's metadata

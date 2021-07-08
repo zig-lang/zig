@@ -121,9 +121,11 @@ pub const Output = struct {
 };
 
 pub const TextBlock = struct {
+    allocator: *Allocator,
     local_sym_index: u32,
     aliases: ?[]u32 = null,
     references: std.AutoArrayHashMap(u32, void),
+    contained: ?[]SymbolAtOffset = null,
     code: []u8,
     relocs: std.ArrayList(Relocation),
     size: u64,
@@ -133,20 +135,42 @@ pub const TextBlock = struct {
     next: ?*TextBlock = null,
     prev: ?*TextBlock = null,
 
+    pub const SymbolAtOffset = struct {
+        local_sym_index: u32,
+        offset: u64,
+    };
+
     pub const TlvOffset = struct {
         local_sym_index: u32,
         offset: u64,
     };
 
-    pub fn deinit(block: *TextBlock, allocator: *Allocator) void {
-        if (block.aliases) |aliases| {
-            allocator.free(aliases);
+    pub fn init(allocator: *Allocator) TextBlock {
+        return .{
+            .allocator = allocator,
+            .local_sym_index = undefined,
+            .references = std.AutoArrayHashMap(u32, void).init(allocator),
+            .code = undefined,
+            .relocs = std.ArrayList(Relocation).init(allocator),
+            .size = undefined,
+            .alignment = undefined,
+            .rebases = std.ArrayList(u64).init(allocator),
+            .tlv_offsets = std.ArrayList(TextBlock.TlvOffset).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *TextBlock) void {
+        if (self.aliases) |aliases| {
+            self.allocator.free(aliases);
         }
-        block.relocs.deinit();
-        block.references.deinit();
-        block.rebases.deinit();
-        block.tlv_offsets.deinit();
-        allocator.free(block.code);
+        self.references.deinit();
+        if (self.contained) |contained| {
+            self.allocator.free(contained);
+        }
+        self.allocator.free(self.code);
+        self.relocs.deinit();
+        self.rebases.deinit();
+        self.tlv_offsets.deinit();
     }
 
     pub fn print_this(self: *const TextBlock, zld: *Zld) void {
@@ -162,6 +186,12 @@ pub const TextBlock = struct {
             log.warn("  | references:", .{});
             for (self.references.keys()) |index| {
                 log.warn("    | {}: {}", .{ index, zld.locals.items[index] });
+            }
+        }
+        if (self.contained) |contained| {
+            log.warn("  | contained symbols:", .{});
+            for (contained) |sym_at_off| {
+                log.warn("    | {}: {}", .{ sym_at_off.offset, zld.locals.items[sym_at_off.local_sym_index] });
             }
         }
         log.warn("  | code.len = {}", .{self.code.len});
@@ -1021,10 +1051,20 @@ fn allocateTextBlocks(self: *Zld) !void {
         var base_addr: u64 = sect.addr + sect.size;
 
         while (true) {
+            base_addr -= block.size;
+
             const sym = self.locals.items[block.local_sym_index];
             assert(sym.payload == .regular);
-            sym.payload.regular.address = base_addr - block.size;
-            base_addr -= block.size;
+            sym.payload.regular.address = base_addr;
+
+            // Update each symbol contained within the TextBlock
+            if (block.contained) |contained| {
+                for (contained) |sym_at_off| {
+                    const contained_sym = self.locals.items[sym_at_off.local_sym_index];
+                    assert(contained_sym.payload == .regular);
+                    contained_sym.payload.regular.address = base_addr + sym_at_off.offset;
+                }
+            }
 
             if (block.prev) |prev| {
                 block = prev;
@@ -1476,16 +1516,11 @@ fn resolveSymbols(self: *Zld) !void {
                 const block = try self.allocator.create(TextBlock);
                 errdefer self.allocator.destroy(block);
 
-                block.* = .{
-                    .local_sym_index = local_sym_index,
-                    .references = std.AutoArrayHashMap(u32, void).init(self.allocator),
-                    .code = code,
-                    .relocs = std.ArrayList(Relocation).init(self.allocator),
-                    .rebases = std.ArrayList(u64).init(self.allocator),
-                    .tlv_offsets = std.ArrayList(TextBlock.TlvOffset).init(self.allocator),
-                    .size = size,
-                    .alignment = alignment,
-                };
+                block.* = TextBlock.init(self.allocator);
+                block.local_sym_index = local_sym_index;
+                block.code = code;
+                block.size = size;
+                block.alignment = alignment;
 
                 if (self.blocks.getPtr(match)) |last| {
                     last.*.next = block;
@@ -1907,7 +1942,6 @@ fn addRpaths(self: *Zld, rpaths: []const []const u8) !void {
 
 fn flush(self: *Zld) !void {
     try self.writeStubHelperCommon();
-    try self.resolveRelocsAndWriteSections();
 
     if (self.common_section_index) |index| {
         const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
