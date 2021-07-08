@@ -2582,11 +2582,11 @@ pub fn unescapeValidString(output: []u8, input: []const u8) UnescapeValidStringE
             } else |err| {
                 // it might be a surrogate pair
                 if (err != error.Utf8CannotEncodeSurrogateHalf) {
-                    return UnescapeValidStringError.InvalidUnicodeHexSymbol;
+                    return error.InvalidUnicodeHexSymbol;
                 }
                 // check if a second code unit is present
                 if (inIndex + 7 >= input.len or input[inIndex + 6] != '\\' or input[inIndex + 7] != 'u') {
-                    return UnescapeValidStringError.InvalidUnicodeHexSymbol;
+                    return error.InvalidUnicodeHexSymbol;
                 }
 
                 const secondCodeUnit = std.fmt.parseInt(u16, input[inIndex + 8 .. inIndex + 12], 16) catch unreachable;
