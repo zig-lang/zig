@@ -1874,7 +1874,11 @@ fn parseInternal(
     unreachable;
 }
 
-pub fn parse(comptime T: type, tokens: *TokenStream, options: ParseOptions) !T {
+pub fn ParseError(comptime T: type) type {
+    return ParseInternalError(T) || error{UnexpectedEndOfJson} || TokenStream.Error;
+}
+
+pub fn parse(comptime T: type, tokens: *TokenStream, options: ParseOptions) ParseError(T)!T {
     const token = (try tokens.next()) orelse return error.UnexpectedEndOfJson;
     const r = try parseInternal(T, token, tokens, options);
     errdefer parseFree(T, r, options);
