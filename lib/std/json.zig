@@ -1545,10 +1545,11 @@ fn ParseInternalErrorImpl(comptime T: type, comptime inferred_types: []const typ
 
     switch (@typeInfo(T)) {
         .Bool => return error{UnexpectedToken},
-
         .Float, .ComptimeFloat => return error{UnexpectedToken} || std.fmt.ParseFloatError,
-        .Int, .ComptimeInt => return error{ UnexpectedToken, InvalidNumber, Overflow, InvalidCharacter } ||
-            std.fmt.ParseIntError || std.fmt.ParseFloatError,
+        .Int, .ComptimeInt => {
+            return error{ UnexpectedToken, InvalidNumber, Overflow, InvalidCharacter } ||
+                std.fmt.ParseIntError || std.fmt.ParseFloatError;
+        },
         .Optional => |optionalInfo| {
             return ParseInternalErrorImpl(optionalInfo.child, inferred_types ++ [_]type{T});
         },
@@ -1579,23 +1580,20 @@ fn ParseInternalErrorImpl(comptime T: type, comptime inferred_types: []const typ
             return errors;
         },
         .Array => |arrayInfo| {
-            return error{
-                UnexpectedEndOfJson,
-                UnexpectedToken,
-            } || TokenStream.Error || ParseInternalErrorImpl(arrayInfo.child, inferred_types ++ [_]type{T}) ||
-                UnescapeValidStringError;
+            return error{ UnexpectedEndOfJson, UnexpectedToken } || TokenStream.Error ||
+                UnescapeValidStringError ||
+                ParseInternalErrorImpl(arrayInfo.child, inferred_types ++ [_]type{T});
         },
         .Pointer => |ptrInfo| {
             var errors = error{AllocatorRequired} || std.mem.Allocator.Error;
-
             switch (ptrInfo.size) {
                 .One => {
                     return errors || ParseInternalErrorImpl(ptrInfo.child, inferred_types ++ [_]type{T});
                 },
                 .Slice => {
-                    return errors || error{ UnexpectedEndOfJson, UnexpectedToken } || TokenStream.Error ||
+                    return errors || error{ UnexpectedEndOfJson, UnexpectedToken } ||
                         ParseInternalErrorImpl(ptrInfo.child, inferred_types ++ [_]type{T}) ||
-                        UnescapeValidStringError;
+                        UnescapeValidStringError || TokenStream.Error;
                 },
                 else => @compileError("Unable to parse into type '" ++ @typeName(T) ++ "'"),
             }
