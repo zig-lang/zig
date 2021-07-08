@@ -2477,33 +2477,32 @@ fn writeSymbolTable(self: *Zld) !void {
 
     var locals = std.ArrayList(macho.nlist_64).init(self.allocator);
     defer locals.deinit();
-    try locals.ensureTotalCapacity(self.locals.items.len);
-
-    for (self.locals.items) |symbol| {
-        if (symbol.isTemp()) continue; // TODO when merging codepaths, this should go into freelist
-        const nlist = try symbol.asNlist(self, &self.strtab);
-        locals.appendAssumeCapacity(nlist);
-    }
 
     var exports = std.ArrayList(macho.nlist_64).init(self.allocator);
     defer exports.deinit();
+
+    for (self.locals.items) |symbol, i| {
+        if (i == 0) continue; // skip null symbol
+        if (symbol.isTemp()) continue; // TODO when merging codepaths, this should go into freelist
+        const reg = symbol.payload.regular;
+        const nlist = try symbol.asNlist(self, &self.strtab);
+        if (reg.linkage == .translation_unit) {
+            try locals.append(nlist);
+        } else {
+            try exports.append(nlist);
+        }
+    }
 
     var undefs = std.ArrayList(macho.nlist_64).init(self.allocator);
     defer undefs.deinit();
     var undef_dir = std.StringHashMap(u32).init(self.allocator);
     defer undef_dir.deinit();
 
-    for (self.globals.values()) |sym| {
+    for (self.imports.items) |sym| {
         const nlist = try sym.asNlist(self, &self.strtab);
-        switch (sym.payload) {
-            .regular => try exports.append(nlist),
-            .proxy => {
-                const id = @intCast(u32, undefs.items.len);
-                try undefs.append(nlist);
-                try undef_dir.putNoClobber(sym.name, id);
-            },
-            else => unreachable,
-        }
+        const id = @intCast(u32, undefs.items.len);
+        try undefs.append(nlist);
+        try undef_dir.putNoClobber(sym.name, id);
     }
 
     const nlocals = locals.items.len;
