@@ -225,7 +225,7 @@ pub fn needsTlvOffset(self: Symbol, zld: *Zld) bool {
     return sect_type == macho.S_THREAD_LOCAL_VARIABLES;
 }
 
-pub fn asNlist(symbol: *Symbol, strtab: *StringTable) !macho.nlist_64 {
+pub fn asNlist(symbol: *Symbol, zld: *Zld, strtab: *StringTable) !macho.nlist_64 {
     const n_strx = try strtab.getOrPut(symbol.name);
     const nlist = nlist: {
         switch (symbol.payload) {
@@ -233,7 +233,7 @@ pub fn asNlist(symbol: *Symbol, strtab: *StringTable) !macho.nlist_64 {
                 var nlist = macho.nlist_64{
                     .n_strx = n_strx,
                     .n_type = macho.N_SECT,
-                    .n_sect = regular.section,
+                    .n_sect = regular.sectionId(zld),
                     .n_desc = 0,
                     .n_value = regular.address,
                 };

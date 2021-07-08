@@ -337,6 +337,7 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
         log.warn("  {}", .{sect});
         entry.value_ptr.*.print(self);
     }
+
     try self.flush();
 }
 
@@ -1109,23 +1110,31 @@ fn writeTextBlocks(self: *Zld) !void {
 
         const seg = self.load_commands.items[match.seg].Segment;
         const sect = seg.sections.items[match.sect];
+        const sect_type = sectionType(sect);
 
         log.warn("writing text blocks for section {s},{s}", .{ segmentName(sect), sectionName(sect) });
 
         var code = try self.allocator.alloc(u8, sect.size);
         defer self.allocator.free(code);
 
-        var base_off: u64 = sect.size;
+        if (sect_type == macho.S_ZEROFILL or
+            sect_type == macho.S_THREAD_LOCAL_ZEROFILL or
+            sect_type == macho.S_THREAD_LOCAL_VARIABLES)
+        {
+            mem.set(u8, code, 0);
+        } else {
+            var base_off: u64 = sect.size;
 
-        while (true) {
-            base_off -= block.size;
+            while (true) {
+                base_off -= block.size;
 
-            try block.resolveRelocs(self);
-            mem.copy(u8, code[base_off..][0..block.size], block.code);
+                try block.resolveRelocs(self);
+                mem.copy(u8, code[base_off..][0..block.size], block.code);
 
-            if (block.prev) |prev| {
-                block = prev;
-            } else break;
+                if (block.prev) |prev| {
+                    block = prev;
+                } else break;
+            }
         }
 
         try self.file.?.pwriteAll(code, sect.offset);
@@ -2001,104 +2010,100 @@ fn addRpaths(self: *Zld, rpaths: []const []const u8) !void {
 
 fn flush(self: *Zld) !void {
     try self.writeTextBlocks();
-    // try self.writeStubHelperCommon();
+    try self.writeStubHelperCommon();
 
-    // if (self.common_section_index) |index| {
-    //     const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-    //     const sect = &seg.sections.items[index];
-    //     sect.offset = 0;
-    // }
+    if (self.common_section_index) |index| {
+        const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
+        const sect = &seg.sections.items[index];
+        sect.offset = 0;
+    }
 
-    // if (self.bss_section_index) |index| {
-    //     const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-    //     const sect = &seg.sections.items[index];
-    //     sect.offset = 0;
-    // }
+    if (self.bss_section_index) |index| {
+        const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
+        const sect = &seg.sections.items[index];
+        sect.offset = 0;
+    }
 
-    // if (self.tlv_bss_section_index) |index| {
-    //     const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-    //     const sect = &seg.sections.items[index];
-    //     sect.offset = 0;
-    // }
+    if (self.tlv_bss_section_index) |index| {
+        const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
+        const sect = &seg.sections.items[index];
+        sect.offset = 0;
+    }
 
-    // if (self.tlv_section_index) |index| {
-    //     const seg = self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-    //     const sect = &seg.sections.items[index];
+    if (self.tlv_section_index) |index| {
+        // TODO this should be part of relocation resolution routine.
+        const seg = self.load_commands.items[self.data_segment_cmd_index.?].Segment;
+        const sect = &seg.sections.items[index];
 
-    //     var buffer = try self.allocator.alloc(u8, @intCast(usize, sect.size));
-    //     defer self.allocator.free(buffer);
-    //     _ = try self.file.?.preadAll(buffer, sect.offset);
+        const base_addr = if (self.tlv_data_section_index) |i|
+            seg.sections.items[i].addr
+        else
+            seg.sections.items[self.tlv_bss_section_index.?].addr;
 
-    //     var stream = std.io.fixedBufferStream(buffer);
-    //     var writer = stream.writer();
+        var block: *TextBlock = self.blocks.get(.{
+            .seg = self.data_segment_cmd_index.?,
+            .sect = index,
+        }) orelse unreachable;
 
-    //     std.sort.sort(TlvOffset, self.threadlocal_offsets.items, {}, TlvOffset.cmp);
+        var buffer = try self.allocator.alloc(u8, @intCast(usize, sect.size));
+        defer self.allocator.free(buffer);
+        _ = try self.file.?.preadAll(buffer, sect.offset);
 
-    //     const seek_amt = 2 * @sizeOf(u64);
-    //     for (self.threadlocal_offsets.items) |tlv| {
-    //         try writer.context.seekBy(seek_amt);
-    //         try writer.writeIntLittle(u64, tlv.offset);
-    //     }
+        while (true) {
+            for (block.tlv_offsets.items) |tlv_offset| {
+                const sym = self.locals.items[tlv_offset.local_sym_index];
+                assert(sym.payload == .regular);
+                const offset = sym.payload.regular.address - base_addr;
+                mem.writeIntLittle(u64, buffer[tlv_offset.offset..][0..@sizeOf(u64)], offset);
+            }
 
-    //     try self.file.?.pwriteAll(buffer, sect.offset);
-    // }
+            if (block.prev) |prev| {
+                block = prev;
+            } else break;
+        }
 
-    // if (self.mod_init_func_section_index) |index| {
-    //     const seg = self.load_commands.items[self.data_const_segment_cmd_index.?].Segment;
-    //     const sect = &seg.sections.items[index];
+        try self.file.?.pwriteAll(buffer, sect.offset);
+    }
 
-    //     var initializers = std.ArrayList(u64).init(self.allocator);
-    //     defer initializers.deinit();
-
-    //     for (self.objects.items) |object| {
-    //         for (object.initializers.items) |sym_id| {
-    //             const address = object.symbols.items[sym_id].payload.regular.address;
-    //             try initializers.append(address);
-    //         }
-    //     }
-
-    //     _ = try self.file.?.pwriteAll(mem.sliceAsBytes(initializers.items), sect.offset);
-    //     sect.size = @intCast(u32, initializers.items.len * @sizeOf(u64));
-    // }
-
-    // try self.writeGotEntries();
-    // try self.setEntryPoint();
-    // try self.writeRebaseInfoTable();
-    // try self.writeBindInfoTable();
-    // try self.writeLazyBindInfoTable();
-    // try self.writeExportInfo();
+    try self.writeGotEntries();
+    try self.setEntryPoint();
+    try self.writeRebaseInfoTable();
+    try self.writeBindInfoTable();
+    try self.writeLazyBindInfoTable();
+    try self.writeExportInfo();
+    // TODO DICE for x86_64
     // try self.writeDataInCode();
 
-    // {
-    //     const seg = &self.load_commands.items[self.linkedit_segment_cmd_index.?].Segment;
-    //     const symtab = &self.load_commands.items[self.symtab_cmd_index.?].Symtab;
-    //     symtab.symoff = @intCast(u32, seg.inner.fileoff + seg.inner.filesize);
-    // }
+    {
+        const seg = &self.load_commands.items[self.linkedit_segment_cmd_index.?].Segment;
+        const symtab = &self.load_commands.items[self.symtab_cmd_index.?].Symtab;
+        symtab.symoff = @intCast(u32, seg.inner.fileoff + seg.inner.filesize);
+    }
 
-    // try self.writeSymbolTable();
-    // try self.writeStringTable();
+    try self.writeSymbolTable();
+    try self.writeStringTable();
 
-    // {
-    //     // Seal __LINKEDIT size
-    //     const seg = &self.load_commands.items[self.linkedit_segment_cmd_index.?].Segment;
-    //     seg.inner.vmsize = mem.alignForwardGeneric(u64, seg.inner.filesize, self.page_size.?);
-    // }
+    {
+        // Seal __LINKEDIT size
+        const seg = &self.load_commands.items[self.linkedit_segment_cmd_index.?].Segment;
+        seg.inner.vmsize = mem.alignForwardGeneric(u64, seg.inner.filesize, self.page_size.?);
+    }
 
-    // if (self.target.?.cpu.arch == .aarch64) {
-    //     try self.writeCodeSignaturePadding();
-    // }
+    if (self.target.?.cpu.arch == .aarch64) {
+        try self.writeCodeSignaturePadding();
+    }
 
-    // try self.writeLoadCommands();
-    // try self.writeHeader();
+    try self.writeLoadCommands();
+    try self.writeHeader();
 
-    // if (self.target.?.cpu.arch == .aarch64) {
-    //     try self.writeCodeSignature();
-    // }
+    if (self.target.?.cpu.arch == .aarch64) {
+        try self.writeCodeSignature();
+    }
 
-    // if (comptime std.Target.current.isDarwin() and std.Target.current.cpu.arch == .aarch64) {
-    //     const out_path = self.output.?.path;
-    //     try fs.cwd().copyFile(out_path, fs.cwd(), out_path, .{});
-    // }
+    if (comptime std.Target.current.isDarwin() and std.Target.current.cpu.arch == .aarch64) {
+        const out_path = self.output.?.path;
+        try fs.cwd().copyFile(out_path, fs.cwd(), out_path, .{});
+    }
 }
 
 fn writeGotEntries(self: *Zld) !void {
@@ -2140,8 +2145,35 @@ fn writeRebaseInfoTable(self: *Zld) !void {
     var pointers = std.ArrayList(Pointer).init(self.allocator);
     defer pointers.deinit();
 
-    try pointers.ensureCapacity(self.local_rebases.items.len);
-    pointers.appendSliceAssumeCapacity(self.local_rebases.items);
+    {
+        var it = self.blocks.iterator();
+        while (it.next()) |entry| {
+            const match = entry.key_ptr.*;
+            var block: *TextBlock = entry.value_ptr.*;
+
+            if (match.seg == self.text_segment_cmd_index.?) continue; // __TEXT is non-writable
+
+            const seg = self.load_commands.items[match.seg].Segment;
+            const sect = seg.sections.items[match.sect];
+
+            while (true) {
+                const sym = self.locals.items[block.local_sym_index];
+                assert(sym.payload == .regular);
+                const base_offset = sym.payload.regular.address - seg.inner.vmaddr;
+
+                for (block.rebases.items) |offset| {
+                    try pointers.append(.{
+                        .offset = base_offset + offset,
+                        .segment_id = match.seg,
+                    });
+                }
+
+                if (block.prev) |prev| {
+                    block = prev;
+                } else break;
+            }
+        }
+    }
 
     if (self.got_section_index) |idx| {
         const seg = self.load_commands.items[self.data_const_segment_cmd_index.?].Segment;
@@ -2156,24 +2188,6 @@ fn writeRebaseInfoTable(self: *Zld) !void {
                 .offset = base_offset + sym.got_index.? * @sizeOf(u64),
                 .segment_id = segment_id,
             });
-        }
-    }
-
-    if (self.mod_init_func_section_index) |idx| {
-        const seg = self.load_commands.items[self.data_const_segment_cmd_index.?].Segment;
-        const sect = seg.sections.items[idx];
-        const base_offset = sect.addr - seg.inner.vmaddr;
-        const segment_id = @intCast(u16, self.data_const_segment_cmd_index.?);
-
-        var index: u64 = 0;
-        for (self.objects.items) |object| {
-            for (object.initializers.items) |_| {
-                try pointers.append(.{
-                    .offset = base_offset + index * @sizeOf(u64),
-                    .segment_id = segment_id,
-                });
-                index += 1;
-            }
         }
     }
 
@@ -2240,10 +2254,15 @@ fn writeBindInfoTable(self: *Zld) !void {
 
         const proxy = sym.payload.proxy;
         for (proxy.bind_info.items) |info| {
-            const seg = self.load_commands.items[info.segment_id].Segment;
+            const bind_sym = self.locals.items[info.local_sym_index];
+            assert(bind_sym.payload == .regular);
+            const reg = bind_sym.payload.regular;
+            const base_address = self.load_commands.items[reg.segment_id].Segment.inner.vmaddr;
+            const offset = reg.address + info.offset - base_address;
+
             try pointers.append(.{
-                .offset = info.address - seg.inner.vmaddr,
-                .segment_id = info.segment_id,
+                .offset = offset,
+                .segment_id = reg.segment_id,
                 .dylib_ordinal = proxy.dylibOrdinal(),
                 .name = sym.name,
             });
@@ -2462,7 +2481,7 @@ fn writeSymbolTable(self: *Zld) !void {
 
     for (self.locals.items) |symbol| {
         if (symbol.isTemp()) continue; // TODO when merging codepaths, this should go into freelist
-        const nlist = try symbol.asNlist(&self.strtab);
+        const nlist = try symbol.asNlist(self, &self.strtab);
         locals.appendAssumeCapacity(nlist);
     }
 
@@ -2475,7 +2494,7 @@ fn writeSymbolTable(self: *Zld) !void {
     defer undef_dir.deinit();
 
     for (self.globals.values()) |sym| {
-        const nlist = try sym.asNlist(&self.strtab);
+        const nlist = try sym.asNlist(self, &self.strtab);
         switch (sym.payload) {
             .regular => try exports.append(nlist),
             .proxy => {
