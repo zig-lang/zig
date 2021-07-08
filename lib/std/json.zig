@@ -1532,7 +1532,7 @@ test "skipValue" {
     }
 }
 
-fn ParseInternalError(comptime T: type, inferred_types: []const type) type {
+fn ParseInternalError(comptime T: type, comptime inferred_types: []const type) type {
     for (inferred_types) |ty| {
         if (T == ty) return error{};
     }
