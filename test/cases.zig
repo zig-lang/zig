@@ -1661,7 +1661,11 @@ pub fn addCases(ctx: *TestContext) !void {
             \\    const b = false;
             \\    _ = a & &b;
             \\}
-        , &[_][]const u8{":4:11: error: incompatible types: 'bool' and '*const bool'"});
+        , &[_][]const u8{
+            ":4:11: error: incompatible types: 'bool' and '*const bool'",
+            ":4:9: note: type 'bool' here",
+            ":4:13: note: type '*const bool' here",
+        });
 
         case.addCompareOutput(
             \\pub fn main() void {
