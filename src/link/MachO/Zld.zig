@@ -1046,22 +1046,28 @@ fn allocateTextBlocks(self: *Zld) !void {
         const match = entry.key_ptr.*;
         var block: *TextBlock = entry.value_ptr.*;
 
+        // Find the first block
+        while (block.prev) |prev| {
+            block = prev;
+        }
+
         const seg = self.load_commands.items[match.seg].Segment;
         const sect = seg.sections.items[match.sect];
-        var base_addr: u64 = sect.addr + sect.size;
 
-        log.debug("  within section {s},{s}", .{ segmentName(sect), sectionName(sect) });
-        log.debug("    {}", .{sect});
+        var base_addr: u64 = sect.addr;
+
+        log.warn("  within section {s},{s}", .{ segmentName(sect), sectionName(sect) });
+        log.warn("    {}", .{sect});
 
         while (true) {
             const block_alignment = try math.powi(u32, 2, block.alignment);
-            base_addr = mem.alignBackwardGeneric(u64, base_addr - block.size, block_alignment);
+            base_addr = mem.alignForwardGeneric(u64, base_addr, block_alignment);
 
             const sym = self.locals.items[block.local_sym_index];
             assert(sym.payload == .regular);
             sym.payload.regular.address = base_addr;
 
-            log.debug("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
+            log.warn("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
                 sym.name,
                 base_addr,
                 base_addr + block.size,
@@ -1087,8 +1093,10 @@ fn allocateTextBlocks(self: *Zld) !void {
                 }
             }
 
-            if (block.prev) |prev| {
-                block = prev;
+            base_addr += block.size;
+
+            if (block.next) |next| {
+                block = next;
             } else break;
         }
     }
@@ -1102,12 +1110,16 @@ fn writeTextBlocks(self: *Zld) !void {
         const match = entry.key_ptr.*;
         var block: *TextBlock = entry.value_ptr.*;
 
+        while (block.prev) |prev| {
+            block = prev;
+        }
+
         const seg = self.load_commands.items[match.seg].Segment;
         const sect = seg.sections.items[match.sect];
         const sect_type = sectionType(sect);
 
-        log.debug("  for section {s},{s}", .{ segmentName(sect), sectionName(sect) });
-        log.debug("    {}", .{sect});
+        log.warn("  for section {s},{s}", .{ segmentName(sect), sectionName(sect) });
+        log.warn("    {}", .{sect});
 
         var code = try self.allocator.alloc(u8, sect.size);
         defer self.allocator.free(code);
@@ -1115,15 +1127,14 @@ fn writeTextBlocks(self: *Zld) !void {
         if (sect_type == macho.S_ZEROFILL or sect_type == macho.S_THREAD_LOCAL_ZEROFILL) {
             mem.set(u8, code, 0);
         } else {
-            var base_off: u64 = sect.size;
+            var base_off: u64 = 0;
 
             while (true) {
                 const block_alignment = try math.powi(u32, 2, block.alignment);
-                const unaligned_base_off = base_off - block.size;
-                const aligned_base_off = mem.alignBackwardGeneric(u64, unaligned_base_off, block_alignment);
+                const aligned_base_off = mem.alignForwardGeneric(u64, base_off, block_alignment);
 
                 const sym = self.locals.items[block.local_sym_index];
-                log.debug("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
+                log.warn("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
                     sym.name,
                     aligned_base_off,
                     aligned_base_off + block.size,
@@ -1135,16 +1146,17 @@ fn writeTextBlocks(self: *Zld) !void {
                 mem.copy(u8, code[aligned_base_off..][0..block.size], block.code);
 
                 // TODO NOP for machine code instead of just zeroing out
-                const padding_off = aligned_base_off + block.size;
-                const padding_len = unaligned_base_off - aligned_base_off;
-                mem.set(u8, code[padding_off..][0..padding_len], 0);
+                const padding_len = aligned_base_off - base_off;
+                mem.set(u8, code[base_off..][0..padding_len], 0);
 
-                base_off = aligned_base_off;
+                base_off = aligned_base_off + block.size;
 
-                if (block.prev) |prev| {
-                    block = prev;
+                if (block.next) |next| {
+                    block = next;
                 } else break;
             }
+
+            mem.set(u8, code[base_off..], 0);
         }
 
         try self.file.?.pwriteAll(code, sect.offset);

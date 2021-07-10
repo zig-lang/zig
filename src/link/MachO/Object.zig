@@ -502,6 +502,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
 
         // Is there any padding between symbols within the section?
         const is_splittable = self.header.?.flags & macho.MH_SUBSECTIONS_VIA_SYMBOLS != 0;
+        // const is_splittable = false;
 
         next: {
             if (is_splittable) blocks: {
