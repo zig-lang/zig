@@ -171,52 +171,49 @@ pub const TextBlock = struct {
         }
     }
 
-    pub fn format(self: *const TextBlock, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = fmt;
-        _ = options;
-        try std.fmt.format(writer, "TextBlock {{\n", .{});
-        try std.fmt.format(writer, "  {}: {}\n", .{ self.local_sym_index, zld.locals.items[self.local_sym_index] });
+    pub fn print_this(self: *const TextBlock, zld: *Zld) void {
+        log.warn("TextBlock", .{});
+        log.warn("  {}: {}", .{ self.local_sym_index, zld.locals.items[self.local_sym_index] });
         if (self.aliases) |aliases| {
-            try std.fmt.format(writer, "  aliases:\n", .{});
+            log.warn("  aliases:", .{});
             for (aliases) |index| {
-                try std.fmt.format(writer, "    {}: {}\n", .{ index, zld.locals.items[index] });
+                log.warn("    {}: {}", .{ index, zld.locals.items[index] });
             }
         }
         if (self.references.count() > 0) {
-            try std.fmt.format(writer, "  references:\n", .{});
+            log.warn("  references:", .{});
             for (self.references.keys()) |index| {
-                try std.fmt.format(writer, "    {}: {}\n", .{ index, zld.locals.items[index] });
+                log.warn("    {}: {}", .{ index, zld.locals.items[index] });
             }
         }
         if (self.contained) |contained| {
-            try std.fmt.format(writer, "  contained symbols:\n", .{});
+            log.warn("  contained symbols:", .{});
             for (contained) |sym_at_off| {
-                try std.fmt.format(writer, "    {}: {}\n", .{
+                log.warn("    {}: {}\n", .{
                     sym_at_off.offset,
                     zld.locals.items[sym_at_off.local_sym_index],
                 });
             }
         }
-        try std.fmt.format(writer, "  code.len = {}\n", .{self.code.len});
+        log.warn("  code.len = {}", .{self.code.len});
         if (self.relocs.items.len > 0) {
-            try std.fmt.format(writer, "  relocations:\n", .{});
+            log.warn("  relocations:", .{});
             for (self.relocs.items) |rel| {
-                try std.fmt.format(writer, "    {}\n", .{rel});
+                log.warn("    {}", .{rel});
             }
         }
         if (self.rebases.items.len > 0) {
-            try std.fmt.format(writer, "  rebases: {any}\n", .{self.rebases.items});
+            log.warn("  rebases: {any}", .{self.rebases.items});
         }
-        try std.fmt.format(writer, "  size = {}\n", .{self.size});
-        try std.fmt.format(writer, "  align = {}\n", .{self.alignment});
-        try std.fmt.format(writer, "}}", .{});
+        log.warn("  size = {}", .{self.size});
+        log.warn("  align = {}", .{self.alignment});
     }
 
     pub fn print(self: *const TextBlock, zld: *Zld) void {
         if (self.prev) |prev| {
             prev.print(zld);
         }
-        log.warn("{}\n", .{self});
+        self.print_this(zld);
     }
 };
 
@@ -323,15 +320,15 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     self.allocateLinkeditSegment();
     try self.allocateTextBlocks();
 
-    // var it = self.blocks.iterator();
-    // while (it.next()) |entry| {
-    //     const seg = self.load_commands.items[entry.key_ptr.seg].Segment;
-    //     const sect = seg.sections.items[entry.key_ptr.sect];
+    var it = self.blocks.iterator();
+    while (it.next()) |entry| {
+        const seg = self.load_commands.items[entry.key_ptr.seg].Segment;
+        const sect = seg.sections.items[entry.key_ptr.sect];
 
-    //     log.warn("\n\n{s},{s} contents:", .{ segmentName(sect), sectionName(sect) });
-    //     log.warn("  {}", .{sect});
-    //     entry.value_ptr.*.print(self);
-    // }
+        log.warn("\n\n{s},{s} contents:", .{ segmentName(sect), sectionName(sect) });
+        log.warn("  {}", .{sect});
+        entry.value_ptr.*.print(self);
+    }
 
     try self.flush();
 }
