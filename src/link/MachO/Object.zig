@@ -413,6 +413,12 @@ const TextBlockParser = struct {
         const code = self.code[start_addr..end_addr];
         const size = code.len;
 
+        const max_align = self.section.@"align";
+        const actual_align = if (senior_nlist.nlist.n_value > 0)
+            math.min(@ctz(u64, senior_nlist.nlist.n_value), max_align)
+        else
+            max_align;
+
         const alias_only_indices = if (aliases.items.len > 0) blk: {
             var out = std.ArrayList(u32).init(self.allocator);
             try out.ensureTotalCapacity(aliases.items.len);
@@ -435,7 +441,7 @@ const TextBlockParser = struct {
         block.aliases = alias_only_indices;
         block.code = try self.allocator.dupe(u8, code);
         block.size = size;
-        block.alignment = self.section.@"align";
+        block.alignment = actual_align;
 
         const relocs = filterRelocs(self.relocs, start_addr, end_addr);
         if (relocs.len > 0) {
@@ -524,7 +530,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                     const reg = &sym.payload.regular;
                     if (reg.file) |file| {
                         if (file != self) {
-                            log.debug("deduping definition of {s} in {s}", .{ sym.name, self.name.? });
+                            log.warn("deduping definition of {s} in {s}", .{ sym.name, self.name.? });
                             block.deinit();
                             self.allocator.destroy(block);
                             continue;

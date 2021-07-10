@@ -320,15 +320,15 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     self.allocateLinkeditSegment();
     try self.allocateTextBlocks();
 
-    var it = self.blocks.iterator();
-    while (it.next()) |entry| {
-        const seg = self.load_commands.items[entry.key_ptr.seg].Segment;
-        const sect = seg.sections.items[entry.key_ptr.sect];
+    // var it = self.blocks.iterator();
+    // while (it.next()) |entry| {
+    //     const seg = self.load_commands.items[entry.key_ptr.seg].Segment;
+    //     const sect = seg.sections.items[entry.key_ptr.sect];
 
-        log.warn("\n\n{s},{s} contents:", .{ segmentName(sect), sectionName(sect) });
-        log.warn("  {}", .{sect});
-        entry.value_ptr.*.print(self);
-    }
+    //     log.warn("\n\n{s},{s} contents:", .{ segmentName(sect), sectionName(sect) });
+    //     log.warn("  {}", .{sect});
+    //     entry.value_ptr.*.print(self);
+    // }
 
     try self.flush();
 }
@@ -1056,8 +1056,8 @@ fn allocateTextBlocks(self: *Zld) !void {
 
         var base_addr: u64 = sect.addr;
 
-        log.warn("  within section {s},{s}", .{ segmentName(sect), sectionName(sect) });
-        log.warn("    {}", .{sect});
+        log.debug("  within section {s},{s}", .{ segmentName(sect), sectionName(sect) });
+        log.debug("    {}", .{sect});
 
         while (true) {
             const block_alignment = try math.powi(u32, 2, block.alignment);
@@ -1067,7 +1067,7 @@ fn allocateTextBlocks(self: *Zld) !void {
             assert(sym.payload == .regular);
             sym.payload.regular.address = base_addr;
 
-            log.warn("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
+            log.debug("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
                 sym.name,
                 base_addr,
                 base_addr + block.size,
@@ -1118,8 +1118,8 @@ fn writeTextBlocks(self: *Zld) !void {
         const sect = seg.sections.items[match.sect];
         const sect_type = sectionType(sect);
 
-        log.warn("  for section {s},{s}", .{ segmentName(sect), sectionName(sect) });
-        log.warn("    {}", .{sect});
+        log.debug("  for section {s},{s}", .{ segmentName(sect), sectionName(sect) });
+        log.debug("    {}", .{sect});
 
         var code = try self.allocator.alloc(u8, sect.size);
         defer self.allocator.free(code);
@@ -1134,7 +1134,7 @@ fn writeTextBlocks(self: *Zld) !void {
                 const aligned_base_off = mem.alignForwardGeneric(u64, base_off, block_alignment);
 
                 const sym = self.locals.items[block.local_sym_index];
-                log.warn("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
+                log.debug("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
                     sym.name,
                     aligned_base_off,
                     aligned_base_off + block.size,
@@ -1433,7 +1433,7 @@ fn writeStubInStubHelper(self: *Zld, index: u32) !void {
 fn resolveSymbolsInObject(self: *Zld, object: *Object) !void {
     log.debug("resolving symbols in '{s}'", .{object.name});
 
-    for (object.symtab.items) |sym, sym_id| {
+    for (object.symtab.items) |sym| {
         const sym_name = object.getString(sym.n_strx);
 
         if (Symbol.isStab(sym)) {
@@ -2152,7 +2152,6 @@ fn writeRebaseInfoTable(self: *Zld) !void {
             if (match.seg == self.text_segment_cmd_index.?) continue; // __TEXT is non-writable
 
             const seg = self.load_commands.items[match.seg].Segment;
-            const sect = seg.sections.items[match.sect];
 
             while (true) {
                 const sym = self.locals.items[block.local_sym_index];

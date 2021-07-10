@@ -110,6 +110,7 @@ pub const Relocation = struct {
         }
 
         pub fn format(self: Branch, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+            _ = self;
             _ = fmt;
             _ = options;
             try std.fmt.format(writer, "Branch {{}}", .{});
@@ -179,7 +180,7 @@ pub const Relocation = struct {
             load,
         };
 
-        pub fn resolve(self: PageOff, base: Relocation, source_addr: u64, target_addr: u64) !void {
+        pub fn resolve(self: PageOff, base: Relocation, _: u64, target_addr: u64) !void {
             switch (self.kind) {
                 .page => {
                     const actual_target_addr = if (self.addend) |addend| target_addr + addend else target_addr;
@@ -325,12 +326,13 @@ pub const Relocation = struct {
     };
 
     pub const PointerToGot = struct {
-        pub fn resolve(self: PointerToGot, base: Relocation, source_addr: u64, target_addr: u64) !void {
+        pub fn resolve(_: PointerToGot, base: Relocation, source_addr: u64, target_addr: u64) !void {
             const result = try math.cast(i32, @intCast(i64, target_addr) - @intCast(i64, source_addr));
             mem.writeIntLittle(u32, base.block.code[base.offset..][0..4], @bitCast(u32, result));
         }
 
         pub fn format(self: PointerToGot, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+            _ = self;
             _ = fmt;
             _ = options;
             try std.fmt.format(writer, "PointerToGot {{}}", .{});
@@ -342,6 +344,10 @@ pub const Relocation = struct {
         correction: i4,
 
         pub fn resolve(self: Signed, base: Relocation, source_addr: u64, target_addr: u64) !void {
+            _ = self;
+            _ = base;
+            _ = source_addr;
+            _ = target_addr;
             //     const target_addr = target_addr: {
             //         if (signed.base.target == .section) {
             //             const source_target = @intCast(i64, args.source_source_sect_addr.?) + @intCast(i64, signed.base.offset) + signed.addend + 4;
