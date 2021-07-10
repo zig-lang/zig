@@ -451,7 +451,7 @@ const TextBlockParser = struct {
 pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
     const seg = self.load_commands.items[self.segment_cmd_index.?].Segment;
 
-    log.warn("analysing {s}", .{self.name.?});
+    log.debug("analysing {s}", .{self.name.?});
 
     const dysymtab = self.load_commands.items[self.dysymtab_cmd_index.?].Dysymtab;
     // We only care about defined symbols, so filter every other out.
@@ -472,14 +472,14 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
 
     for (seg.sections.items) |sect, id| {
         const sect_id = @intCast(u8, id);
-        log.warn("putting section '{s},{s}' as a TextBlock", .{
+        log.debug("putting section '{s},{s}' as a TextBlock", .{
             segmentName(sect),
             sectionName(sect),
         });
 
         // Get matching segment/section in the final artifact.
         const match = (try zld.getMatchingSection(sect)) orelse {
-            log.warn("unhandled section", .{});
+            log.debug("unhandled section", .{});
             continue;
         };
 
@@ -523,7 +523,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                     const reg = &sym.payload.regular;
                     if (reg.file) |file| {
                         if (file != self) {
-                            log.warn("deduping definition of {s} in {s}", .{ sym.name, self.name.? });
+                            log.debug("deduping definition of {s} in {s}", .{ sym.name, self.name.? });
                             block.deinit();
                             self.allocator.destroy(block);
                             continue;

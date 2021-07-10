@@ -491,9 +491,9 @@ pub const Relocation = struct {
             }
         };
 
-        log.warn("relocating {}", .{self});
-        log.warn("  | source_addr = 0x{x}", .{source_addr});
-        log.warn("  | target_addr = 0x{x}", .{target_addr});
+        log.debug("relocating {}", .{self});
+        log.debug("  | source_addr = 0x{x}", .{source_addr});
+        log.debug("  | target_addr = 0x{x}", .{target_addr});
 
         switch (self.payload) {
             .unsigned => |unsigned| try unsigned.resolve(self, source_addr, target_addr),

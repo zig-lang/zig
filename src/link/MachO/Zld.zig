@@ -171,46 +171,52 @@ pub const TextBlock = struct {
         }
     }
 
-    pub fn print_this(self: *const TextBlock, zld: *Zld) void {
-        log.warn("TextBlock", .{});
-        log.warn("  | {}: {}", .{ self.local_sym_index, zld.locals.items[self.local_sym_index] });
+    pub fn format(self: *const TextBlock, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+        try std.fmt.format(writer, "TextBlock {{\n", .{});
+        try std.fmt.format(writer, "  {}: {}\n", .{ self.local_sym_index, zld.locals.items[self.local_sym_index] });
         if (self.aliases) |aliases| {
-            log.warn("  | aliases:", .{});
+            try std.fmt.format(writer, "  aliases:\n", .{});
             for (aliases) |index| {
-                log.warn("    | {}: {}", .{ index, zld.locals.items[index] });
+                try std.fmt.format(writer, "    {}: {}\n", .{ index, zld.locals.items[index] });
             }
         }
         if (self.references.count() > 0) {
-            log.warn("  | references:", .{});
+            try std.fmt.format(writer, "  references:\n", .{});
             for (self.references.keys()) |index| {
-                log.warn("    | {}: {}", .{ index, zld.locals.items[index] });
+                try std.fmt.format(writer, "    {}: {}\n", .{ index, zld.locals.items[index] });
             }
         }
         if (self.contained) |contained| {
-            log.warn("  | contained symbols:", .{});
+            try std.fmt.format(writer, "  contained symbols:\n", .{});
             for (contained) |sym_at_off| {
-                log.warn("    | {}: {}", .{ sym_at_off.offset, zld.locals.items[sym_at_off.local_sym_index] });
+                try std.fmt.format(writer, "    {}: {}\n", .{
+                    sym_at_off.offset,
+                    zld.locals.items[sym_at_off.local_sym_index],
+                });
             }
         }
-        log.warn("  | code.len = {}", .{self.code.len});
+        try std.fmt.format(writer, "  code.len = {}\n", .{self.code.len});
         if (self.relocs.items.len > 0) {
-            log.warn("  | relocations:", .{});
+            try std.fmt.format(writer, "  relocations:\n", .{});
             for (self.relocs.items) |rel| {
-                log.warn("    | {}", .{rel});
+                try std.fmt.format(writer, "    {}\n", .{rel});
             }
         }
         if (self.rebases.items.len > 0) {
-            log.warn("  | rebases: {any}", .{self.rebases.items});
+            try std.fmt.format(writer, "  rebases: {any}\n", .{self.rebases.items});
         }
-        log.warn("  | size = {}", .{self.size});
-        log.warn("  | align = {}", .{self.alignment});
+        try std.fmt.format(writer, "  size = {}\n", .{self.size});
+        try std.fmt.format(writer, "  align = {}\n", .{self.alignment});
+        try std.fmt.format(writer, "}}", .{});
     }
 
     pub fn print(self: *const TextBlock, zld: *Zld) void {
         if (self.prev) |prev| {
             prev.print(zld);
         }
-        self.print_this(zld);
+        log.warn("{}\n", .{self});
     }
 };
 
@@ -317,15 +323,15 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     self.allocateLinkeditSegment();
     try self.allocateTextBlocks();
 
-    var it = self.blocks.iterator();
-    while (it.next()) |entry| {
-        const seg = self.load_commands.items[entry.key_ptr.seg].Segment;
-        const sect = seg.sections.items[entry.key_ptr.sect];
+    // var it = self.blocks.iterator();
+    // while (it.next()) |entry| {
+    //     const seg = self.load_commands.items[entry.key_ptr.seg].Segment;
+    //     const sect = seg.sections.items[entry.key_ptr.sect];
 
-        log.warn("\n\n{s},{s} contents:", .{ segmentName(sect), sectionName(sect) });
-        log.warn("  {}", .{sect});
-        entry.value_ptr.*.print(self);
-    }
+    //     log.warn("\n\n{s},{s} contents:", .{ segmentName(sect), sectionName(sect) });
+    //     log.warn("  {}", .{sect});
+    //     entry.value_ptr.*.print(self);
+    // }
 
     try self.flush();
 }
@@ -1036,7 +1042,7 @@ fn allocateSegment(self: *Zld, index: u16, offset: u64) !void {
 }
 
 fn allocateTextBlocks(self: *Zld) !void {
-    log.warn("allocating text blocks", .{});
+    log.debug("allocating text blocks", .{});
 
     var it = self.blocks.iterator();
     while (it.next()) |entry| {
@@ -1047,8 +1053,8 @@ fn allocateTextBlocks(self: *Zld) !void {
         const sect = seg.sections.items[match.sect];
         var base_addr: u64 = sect.addr + sect.size;
 
-        log.warn("  within section {s},{s}", .{ segmentName(sect), sectionName(sect) });
-        log.warn("    {}", .{sect});
+        log.debug("  within section {s},{s}", .{ segmentName(sect), sectionName(sect) });
+        log.debug("    {}", .{sect});
 
         while (true) {
             const block_alignment = try math.powi(u32, 2, block.alignment);
@@ -1058,7 +1064,7 @@ fn allocateTextBlocks(self: *Zld) !void {
             assert(sym.payload == .regular);
             sym.payload.regular.address = base_addr;
 
-            log.warn("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
+            log.debug("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
                 sym.name,
                 base_addr,
                 base_addr + block.size,
@@ -1092,7 +1098,7 @@ fn allocateTextBlocks(self: *Zld) !void {
 }
 
 fn writeTextBlocks(self: *Zld) !void {
-    log.warn("writing text blocks", .{});
+    log.debug("writing text blocks", .{});
 
     var it = self.blocks.iterator();
     while (it.next()) |entry| {
@@ -1103,8 +1109,8 @@ fn writeTextBlocks(self: *Zld) !void {
         const sect = seg.sections.items[match.sect];
         const sect_type = sectionType(sect);
 
-        log.warn("  for section {s},{s}", .{ segmentName(sect), sectionName(sect) });
-        log.warn("    {}", .{sect});
+        log.debug("  for section {s},{s}", .{ segmentName(sect), sectionName(sect) });
+        log.debug("    {}", .{sect});
 
         var code = try self.allocator.alloc(u8, sect.size);
         defer self.allocator.free(code);
@@ -1120,7 +1126,7 @@ fn writeTextBlocks(self: *Zld) !void {
                 const aligned_base_off = mem.alignBackwardGeneric(u64, unaligned_base_off, block_alignment);
 
                 const sym = self.locals.items[block.local_sym_index];
-                log.warn("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
+                log.debug("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
                     sym.name,
                     aligned_base_off,
                     aligned_base_off + block.size,
