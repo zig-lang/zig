@@ -1603,6 +1603,17 @@ fn resolveSymbols(self: *Zld) !void {
                 block.size = size;
                 block.alignment = alignment;
 
+                // Update target section's metadata
+                // TODO should we update segment's size here too?
+                // How does it tie with incremental space allocs?
+                const tseg = &self.load_commands.items[match.seg].Segment;
+                const tsect = &tseg.sections.items[match.sect];
+                const new_alignment = math.max(tsect.@"align", block.alignment);
+                const new_alignment_pow_2 = try math.powi(u32, 2, new_alignment);
+                const new_size = mem.alignForwardGeneric(u64, tsect.size + block.size, new_alignment_pow_2);
+                tsect.size = new_size;
+                tsect.@"align" = new_alignment;
+
                 if (self.blocks.getPtr(match)) |last| {
                     last.*.next = block;
                     block.prev = last.*;
