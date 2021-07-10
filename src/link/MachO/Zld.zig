@@ -1069,7 +1069,7 @@ fn allocateTextBlocks(self: *Zld) !void {
             assert(sym.payload == .regular);
             sym.payload.regular.address = base_addr;
 
-            log.warn("  {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
+            log.warn("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
                 sym.name,
                 base_addr,
                 base_addr + block.size,
@@ -1103,6 +1103,8 @@ fn allocateTextBlocks(self: *Zld) !void {
 }
 
 fn writeTextBlocks(self: *Zld) !void {
+    log.warn("writing text blocks", .{});
+
     var it = self.blocks.iterator();
     while (it.next()) |entry| {
         const match = entry.key_ptr.*;
@@ -1112,7 +1114,8 @@ fn writeTextBlocks(self: *Zld) !void {
         const sect = seg.sections.items[match.sect];
         const sect_type = sectionType(sect);
 
-        log.warn("writing text blocks for section {s},{s}", .{ segmentName(sect), sectionName(sect) });
+        log.warn("  for section {s},{s}", .{ segmentName(sect), sectionName(sect) });
+        log.warn("    {}", .{sect});
 
         var code = try self.allocator.alloc(u8, sect.size);
         defer self.allocator.free(code);
@@ -1126,10 +1129,28 @@ fn writeTextBlocks(self: *Zld) !void {
             var base_off: u64 = sect.size;
 
             while (true) {
-                base_off -= block.size;
+                const block_alignment = try math.powi(u32, 2, block.alignment);
+                const unaligned_base_off = base_off - block.size;
+                const aligned_base_off = mem.alignBackwardGeneric(u64, unaligned_base_off, block_alignment);
+
+                const sym = self.locals.items[block.local_sym_index];
+                log.warn("    {s}: start=0x{x}, end=0x{x}, size={}, align={}", .{
+                    sym.name,
+                    aligned_base_off,
+                    aligned_base_off + block.size,
+                    block.size,
+                    block.alignment,
+                });
 
                 try block.resolveRelocs(self);
-                mem.copy(u8, code[base_off..][0..block.size], block.code);
+                mem.copy(u8, code[aligned_base_off..][0..block.size], block.code);
+
+                // TODO NOP for machine code instead of just zeroing out
+                const padding_off = aligned_base_off + block.size;
+                const padding_len = unaligned_base_off - aligned_base_off;
+                mem.set(u8, code[padding_off..][0..padding_len], 0);
+
+                base_off = aligned_base_off;
 
                 if (block.prev) |prev| {
                     block = prev;
