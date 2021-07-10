@@ -997,6 +997,9 @@ fn linkWithLLD(self: *Coff, comp: *Compilation) !void {
         if (self.base.options.dynamicbase) {
             try argv.append("-dynamicbase");
         }
+
+        try argv.appendSlice(self.base.options.extra_lld_args);
+
         const subsystem_suffix = ss: {
             if (self.base.options.major_subsystem_version) |major| {
                 if (self.base.options.minor_subsystem_version) |minor| {
