@@ -131,16 +131,10 @@ pub const TextBlock = struct {
     size: u64,
     alignment: u32,
     rebases: std.ArrayList(u64),
-    tlv_offsets: std.ArrayList(TlvOffset),
     next: ?*TextBlock = null,
     prev: ?*TextBlock = null,
 
     pub const SymbolAtOffset = struct {
-        local_sym_index: u32,
-        offset: u64,
-    };
-
-    pub const TlvOffset = struct {
         local_sym_index: u32,
         offset: u64,
     };
@@ -155,7 +149,6 @@ pub const TextBlock = struct {
             .size = undefined,
             .alignment = undefined,
             .rebases = std.ArrayList(u64).init(allocator),
-            .tlv_offsets = std.ArrayList(TextBlock.TlvOffset).init(allocator),
         };
     }
 
@@ -170,7 +163,6 @@ pub const TextBlock = struct {
         self.allocator.free(self.code);
         self.relocs.deinit();
         self.rebases.deinit();
-        self.tlv_offsets.deinit();
     }
 
     pub fn resolveRelocs(self: *TextBlock, zld: *Zld) !void {
@@ -209,9 +201,6 @@ pub const TextBlock = struct {
         }
         if (self.rebases.items.len > 0) {
             log.warn("  | rebases: {any}", .{self.rebases.items});
-        }
-        if (self.tlv_offsets.items.len > 0) {
-            log.warn("  | TLV offsets: {any}", .{self.tlv_offsets.items});
         }
         log.warn("  | size = {}", .{self.size});
         log.warn("  | align = {}", .{self.alignment});
@@ -1120,10 +1109,7 @@ fn writeTextBlocks(self: *Zld) !void {
         var code = try self.allocator.alloc(u8, sect.size);
         defer self.allocator.free(code);
 
-        if (sect_type == macho.S_ZEROFILL or
-            sect_type == macho.S_THREAD_LOCAL_ZEROFILL or
-            sect_type == macho.S_THREAD_LOCAL_VARIABLES)
-        {
+        if (sect_type == macho.S_ZEROFILL or sect_type == macho.S_THREAD_LOCAL_ZEROFILL) {
             mem.set(u8, code, 0);
         } else {
             var base_off: u64 = sect.size;
@@ -2049,41 +2035,6 @@ fn flush(self: *Zld) !void {
         const seg = &self.load_commands.items[self.data_segment_cmd_index.?].Segment;
         const sect = &seg.sections.items[index];
         sect.offset = 0;
-    }
-
-    if (self.tlv_section_index) |index| {
-        // TODO this should be part of relocation resolution routine.
-        const seg = self.load_commands.items[self.data_segment_cmd_index.?].Segment;
-        const sect = &seg.sections.items[index];
-
-        const base_addr = if (self.tlv_data_section_index) |i|
-            seg.sections.items[i].addr
-        else
-            seg.sections.items[self.tlv_bss_section_index.?].addr;
-
-        var block: *TextBlock = self.blocks.get(.{
-            .seg = self.data_segment_cmd_index.?,
-            .sect = index,
-        }) orelse unreachable;
-
-        var buffer = try self.allocator.alloc(u8, @intCast(usize, sect.size));
-        defer self.allocator.free(buffer);
-        _ = try self.file.?.preadAll(buffer, sect.offset);
-
-        while (true) {
-            for (block.tlv_offsets.items) |tlv_offset| {
-                const sym = self.locals.items[tlv_offset.local_sym_index];
-                assert(sym.payload == .regular);
-                const offset = sym.payload.regular.address - base_addr;
-                mem.writeIntLittle(u64, buffer[tlv_offset.offset..][0..@sizeOf(u64)], offset);
-            }
-
-            if (block.prev) |prev| {
-                block = prev;
-            } else break;
-        }
-
-        try self.file.?.pwriteAll(buffer, sect.offset);
     }
 
     try self.writeGotEntries();

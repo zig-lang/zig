@@ -50,7 +50,7 @@ pub const Relocation = struct {
 
         source_sect_addr: ?u64 = null,
 
-        pub fn resolve(self: Unsigned, base: Relocation, source_addr: u64, target_addr: u64) !void {
+        pub fn resolve(self: Unsigned, base: Relocation, _: u64, target_addr: u64) !void {
             const addend = if (self.source_sect_addr) |addr|
                 self.addend - @intCast(i64, addr)
             else
@@ -430,12 +430,43 @@ pub const Relocation = struct {
             }
 
             switch (self.target.payload) {
-                .regular => |reg| break :blk reg.address,
+                .regular => |reg| {
+                    const is_tlv = is_tlv: {
+                        const sym = zld.locals.items[self.block.local_sym_index];
+                        const seg = zld.load_commands.items[sym.payload.regular.segment_id].Segment;
+                        const sect = seg.sections.items[sym.payload.regular.section_id];
+                        break :is_tlv commands.sectionType(sect) == macho.S_THREAD_LOCAL_VARIABLES;
+                    };
+                    if (is_tlv) {
+                        // For TLV relocations, the value specified as a relocation is the displacement from the
+                        // TLV initializer (either value in __thread_data or zero-init in __thread_bss) to the first
+                        // defined TLV template init section in the following order:
+                        // * wrt to __thread_data if defined, then
+                        // * wrt to __thread_bss
+                        const seg = zld.load_commands.items[zld.data_segment_cmd_index.?].Segment;
+                        const base_address = inner: {
+                            if (zld.tlv_data_section_index) |i| {
+                                break :inner seg.sections.items[i].addr;
+                            } else if (zld.tlv_bss_section_index) |i| {
+                                break :inner seg.sections.items[i].addr;
+                            } else {
+                                log.err("threadlocal variables present but no initializer sections found", .{});
+                                log.err("  __thread_data not found", .{});
+                                log.err("  __thread_bss not found", .{});
+                                return error.FailedToResolveRelocationTarget;
+                            }
+                        };
+                        break :blk reg.address - base_address;
+                    }
+
+                    break :blk reg.address;
+                },
                 .proxy => |proxy| {
                     if (mem.eql(u8, self.target.name, "__tlv_bootstrap")) {
-                        const segment = zld.load_commands.items[zld.data_segment_cmd_index.?].Segment;
-                        const tlv = segment.sections.items[zld.tlv_section_index.?];
-                        break :blk tlv.addr;
+                        break :blk 0; // Dynamically bound by dyld.
+                        // const segment = zld.load_commands.items[zld.data_segment_cmd_index.?].Segment;
+                        // const tlv = segment.sections.items[zld.tlv_section_index.?];
+                        // break :blk tlv.addr;
                     }
 
                     const segment = zld.load_commands.items[zld.text_segment_cmd_index.?].Segment;
@@ -676,14 +707,6 @@ pub const Parser = struct {
 
                         if (should_rebase) {
                             try self.block.rebases.append(out_rel.offset);
-                        }
-
-                        // TLV is handled via a separate offset mechanism.
-                        if (sect_type == macho.S_THREAD_LOCAL_VARIABLES) {
-                            try self.block.tlv_offsets.append(.{
-                                .local_sym_index = out_rel.target.payload.regular.local_sym_index,
-                                .offset = out_rel.offset,
-                            });
                         }
                     },
                 }
