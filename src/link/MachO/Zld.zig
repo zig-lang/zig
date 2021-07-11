@@ -1039,8 +1039,6 @@ fn allocateSegment(self: *Zld, index: u16, offset: u64) !void {
 }
 
 fn allocateTextBlocks(self: *Zld) !void {
-    log.debug("allocating text blocks", .{});
-
     var it = self.blocks.iterator();
     while (it.next()) |entry| {
         const match = entry.key_ptr.*;
@@ -1103,8 +1101,6 @@ fn allocateTextBlocks(self: *Zld) !void {
 }
 
 fn writeTextBlocks(self: *Zld) !void {
-    log.debug("writing text blocks", .{});
-
     var it = self.blocks.iterator();
     while (it.next()) |entry| {
         const match = entry.key_ptr.*;

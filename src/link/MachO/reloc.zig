@@ -48,18 +48,11 @@ pub const Relocation = struct {
         /// => * is unreachable
         is_64bit: bool,
 
-        source_sect_addr: ?u64 = null,
-
         pub fn resolve(self: Unsigned, base: Relocation, _: u64, target_addr: u64) !void {
-            const addend = if (self.source_sect_addr) |addr|
-                self.addend - @intCast(i64, addr)
-            else
-                self.addend;
-
             const result = if (self.subtractor) |subtractor|
-                @intCast(i64, target_addr) - @intCast(i64, subtractor.payload.regular.address) + addend
+                @intCast(i64, target_addr) - @intCast(i64, subtractor.payload.regular.address) + self.addend
             else
-                @intCast(i64, target_addr) + addend;
+                @intCast(i64, target_addr) + self.addend;
 
             if (self.is_64bit) {
                 mem.writeIntLittle(u64, base.block.code[base.offset..][0..8], @bitCast(u64, result));
@@ -344,10 +337,6 @@ pub const Relocation = struct {
         correction: i4,
 
         pub fn resolve(self: Signed, base: Relocation, source_addr: u64, target_addr: u64) !void {
-            _ = self;
-            _ = base;
-            _ = source_addr;
-            _ = target_addr;
             //     const target_addr = target_addr: {
             //         if (signed.base.target == .section) {
             //             const source_target = @intCast(i64, args.source_source_sect_addr.?) + @intCast(i64, signed.base.offset) + signed.addend + 4;
@@ -356,16 +345,12 @@ pub const Relocation = struct {
             //         }
             //         break :target_addr @intCast(i64, args.target_addr) + signed.addend;
             //     };
-            //     const displacement = try math.cast(
-            //         i32,
-            //         target_addr - @intCast(i64, args.source_addr) - signed.correction - 4,
-            //     );
-
-            //     log.debug("    | addend 0x{x}", .{signed.addend});
-            //     log.debug("    | correction 0x{x}", .{signed.correction});
-            //     log.debug("    | displacement 0x{x}", .{displacement});
-
-            //     mem.writeIntLittle(u32, signed.base.code[0..4], @bitCast(u32, displacement));
+            const actual_target_addr = @intCast(i64, target_addr) + self.addend;
+            const displacement = try math.cast(
+                i32,
+                actual_target_addr - @intCast(i64, source_addr) - self.correction - 4,
+            );
+            mem.writeIntLittle(u32, base.block.code[base.offset..][0..4], @bitCast(u32, displacement));
         }
 
         pub fn format(self: Signed, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
@@ -759,21 +744,21 @@ pub const Parser = struct {
             2 => false,
             else => unreachable,
         };
-        const addend: i64 = if (is_64bit)
+
+        var addend: i64 = if (is_64bit)
             mem.readIntLittle(i64, self.block.code[parsed.offset..][0..8])
         else
             mem.readIntLittle(i32, self.block.code[parsed.offset..][0..4]);
-        const source_sect_addr = if (rel.r_extern == 0) blk: {
-            if (parsed.target.payload == .regular) break :blk parsed.target.payload.regular.address;
-            break :blk null;
-        } else null;
+
+        if (rel.r_extern == 0) {
+            addend -= @intCast(i64, parsed.target.payload.regular.address);
+        }
 
         parsed.payload = .{
             .unsigned = .{
                 .subtractor = self.subtractor,
                 .is_64bit = is_64bit,
                 .addend = addend,
-                .source_sect_addr = source_sect_addr,
             },
         };
 
