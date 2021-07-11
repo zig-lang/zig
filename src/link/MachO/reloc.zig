@@ -337,14 +337,6 @@ pub const Relocation = struct {
         correction: i4,
 
         pub fn resolve(self: Signed, base: Relocation, source_addr: u64, target_addr: u64) !void {
-            //     const target_addr = target_addr: {
-            //         if (signed.base.target == .section) {
-            //             const source_target = @intCast(i64, args.source_source_sect_addr.?) + @intCast(i64, signed.base.offset) + signed.addend + 4;
-            //             const source_disp = source_target - @intCast(i64, args.source_target_sect_addr.?);
-            //             break :target_addr @intCast(i64, args.target_addr) + source_disp;
-            //         }
-            //         break :target_addr @intCast(i64, args.target_addr) + signed.addend;
-            //     };
             const actual_target_addr = @intCast(i64, target_addr) + self.addend;
             const displacement = try math.cast(
                 i32,
@@ -882,7 +874,14 @@ pub const Parser = struct {
             .X86_64_RELOC_SIGNED_4 => 4,
             else => unreachable,
         };
-        const addend = mem.readIntLittle(i32, self.block.code[parsed.offset..][0..4]) + correction;
+        var addend = mem.readIntLittle(i32, self.block.code[parsed.offset..][0..4]) + correction;
+
+        if (rel.r_extern == 0) {
+            const source_sym = self.zld.locals.items[self.block.local_sym_index].payload.regular;
+            const source_addr = source_sym.address + parsed.offset + @intCast(u32, addend) + 4;
+            const target_sym = parsed.target.payload.regular;
+            addend = try math.cast(i32, @intCast(i64, source_addr) - @intCast(i64, target_sym.address));
+        }
 
         parsed.payload = .{
             .signed = .{
