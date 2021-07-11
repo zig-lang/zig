@@ -273,59 +273,56 @@ pub fn readLoadCommands(self: *Object, reader: anytype) !void {
     }
 }
 
+fn findFirst(comptime T: type, haystack: []T, start: usize, predicate: anytype) usize {
+    if (!@hasDecl(@TypeOf(predicate), "predicate"))
+        @compileError("Predicate is required to define fn predicate(@This(), T) bool");
+
+    if (start == haystack.len) return start;
+
+    var i = start;
+    while (i < haystack.len) : (i += 1) {
+        if (predicate.predicate(haystack[i])) break;
+    }
+    return i;
+}
+
 const NlistWithIndex = struct {
     nlist: macho.nlist_64,
     index: u32,
 
-    fn lessThan(_: void, lhs: @This(), rhs: @This()) bool {
+    fn lessThan(_: void, lhs: NlistWithIndex, rhs: NlistWithIndex) bool {
         return lhs.nlist.n_value < rhs.nlist.n_value;
     }
 
-    fn filterInSection(symbols: []@This(), sect_id: u8) []@This() {
-        var start: usize = 0;
-        var end: usize = symbols.len;
+    fn filterInSection(symbols: []NlistWithIndex, sect: macho.section_64) []NlistWithIndex {
+        const Predicate = struct {
+            addr: u64,
 
-        while (true) {
-            var change = false;
-            if (symbols[start].nlist.n_sect != sect_id) {
-                start += 1;
-                change = true;
+            fn predicate(self: @This(), symbol: NlistWithIndex) bool {
+                return symbol.nlist.n_value >= self.addr;
             }
-            if (symbols[end - 1].nlist.n_sect != sect_id) {
-                end -= 1;
-                change = true;
-            }
+        };
 
-            if (start == end) break;
-            if (!change) break;
-        }
+        const start = findFirst(NlistWithIndex, symbols, 0, Predicate{ .addr = sect.addr });
+        const end = findFirst(NlistWithIndex, symbols, start, Predicate{ .addr = sect.addr + sect.size });
 
         return symbols[start..end];
     }
 };
 
-fn filterRelocs(relocs: []macho.relocation_info, start: u64, end: u64) []macho.relocation_info {
-    if (relocs.len == 0) return relocs;
+fn filterRelocs(relocs: []macho.relocation_info, start_addr: u64, end_addr: u64) []macho.relocation_info {
+    const Predicate = struct {
+        addr: u64,
 
-    var start_id: usize = 0;
-    var end_id: usize = relocs.len;
-
-    while (true) {
-        var change = false;
-        if (relocs[start_id].r_address >= end) {
-            start_id += 1;
-            change = true;
+        fn predicate(self: @This(), rel: macho.relocation_info) bool {
+            return rel.r_address < self.addr;
         }
-        if (relocs[end_id - 1].r_address < start) {
-            end_id -= 1;
-            change = true;
-        }
+    };
 
-        if (start_id == end_id) break;
-        if (!change) break;
-    }
+    const start = findFirst(macho.relocation_info, relocs, 0, Predicate{ .addr = end_addr });
+    const end = findFirst(macho.relocation_info, relocs, start, Predicate{ .addr = start_addr });
 
-    return relocs[start_id..end_id];
+    return relocs[start..end];
 }
 
 const TextBlockParser = struct {
@@ -501,10 +498,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
         const relocs = mem.bytesAsSlice(macho.relocation_info, raw_relocs);
 
         // Symbols within this section only.
-        const filtered_nlists = NlistWithIndex.filterInSection(
-            sorted_nlists.items,
-            sect_id + 1,
-        );
+        const filtered_nlists = NlistWithIndex.filterInSection(sorted_nlists.items, sect);
 
         // Is there any padding between symbols within the section?
         const is_splittable = self.header.?.flags & macho.MH_SUBSECTIONS_VIA_SYMBOLS != 0;
