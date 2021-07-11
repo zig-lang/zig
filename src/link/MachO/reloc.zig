@@ -411,6 +411,8 @@ pub const Relocation = struct {
     };
 
     pub fn resolve(self: Relocation, zld: *Zld) !void {
+        log.debug("relocating {}", .{self});
+
         const source_addr = blk: {
             const sym = zld.locals.items[self.block.local_sym_index];
             break :blk sym.payload.regular.address + self.offset;
@@ -497,7 +499,6 @@ pub const Relocation = struct {
             }
         };
 
-        log.debug("relocating {}", .{self});
         log.debug("  | source_addr = 0x{x}", .{source_addr});
         log.debug("  | target_addr = 0x{x}", .{target_addr});
 
@@ -703,7 +704,9 @@ pub const Parser = struct {
 
                             if (!is_right_segment) break :rebase false;
                             if (sect_type != macho.S_LITERAL_POINTERS and
-                                sect_type != macho.S_REGULAR)
+                                sect_type != macho.S_REGULAR and
+                                sect_type != macho.S_MOD_INIT_FUNC_POINTERS and
+                                sect_type != macho.S_MOD_TERM_FUNC_POINTERS)
                             {
                                 break :rebase false;
                             }

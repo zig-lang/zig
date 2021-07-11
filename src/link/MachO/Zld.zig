@@ -1686,10 +1686,16 @@ fn resolveSymbols(self: *Zld) !void {
     // Fourth pass, handle synthetic symbols and flag any undefined references.
     if (self.globals.get("___dso_handle")) |symbol| {
         if (symbol.payload == .undef) {
+            const seg = self.load_commands.items[self.text_segment_cmd_index.?].Segment;
             symbol.payload = .{
-                .proxy = .{},
+                .regular = .{
+                    .linkage = .translation_unit,
+                    .address = seg.inner.vmaddr,
+                    .weak_ref = true,
+                    .local_sym_index = @intCast(u32, self.locals.items.len),
+                },
             };
-            try self.imports.append(self.allocator, symbol);
+            try self.locals.append(self.allocator, symbol);
         }
     }
 

@@ -530,7 +530,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                     const reg = &sym.payload.regular;
                     if (reg.file) |file| {
                         if (file != self) {
-                            log.warn("deduping definition of {s} in {s}", .{ sym.name, self.name.? });
+                            log.debug("deduping definition of {s} in {s}", .{ sym.name, self.name.? });
                             block.deinit();
                             self.allocator.destroy(block);
                             continue;
