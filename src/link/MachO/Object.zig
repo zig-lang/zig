@@ -325,6 +325,21 @@ fn filterRelocs(relocs: []macho.relocation_info, start_addr: u64, end_addr: u64)
     return relocs[start..end];
 }
 
+fn filterDice(dices: []macho.data_in_code_entry, start_addr: u64, end_addr: u64) []macho.data_in_code_entry {
+    const Predicate = struct {
+        addr: u64,
+
+        fn predicate(self: @This(), dice: macho.data_in_code_entry) bool {
+            return dice.offset >= self.addr;
+        }
+    };
+
+    const start = findFirst(macho.data_in_code_entry, dices, 0, Predicate{ .addr = start_addr });
+    const end = findFirst(macho.data_in_code_entry, dices, start, Predicate{ .addr = end_addr });
+
+    return dices[start..end];
+}
+
 const TextBlockParser = struct {
     allocator: *Allocator,
     section: macho.section_64,
@@ -445,6 +460,23 @@ const TextBlockParser = struct {
             try self.object.parseRelocs(self.zld, relocs, block, start_addr);
         }
 
+        if (self.zld.has_dices) {
+            const dices = filterDice(
+                self.object.data_in_code_entries.items,
+                senior_nlist.nlist.n_value,
+                senior_nlist.nlist.n_value + size,
+            );
+            try block.dices.ensureTotalCapacity(dices.len);
+
+            for (dices) |dice| {
+                block.dices.appendAssumeCapacity(.{
+                    .offset = dice.offset - try math.cast(u32, senior_nlist.nlist.n_value),
+                    .length = dice.length,
+                    .kind = dice.kind,
+                });
+            }
+        }
+
         self.index += 1;
 
         return block;
@@ -503,6 +535,16 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
         // Is there any padding between symbols within the section?
         const is_splittable = self.header.?.flags & macho.MH_SUBSECTIONS_VIA_SYMBOLS != 0;
         // const is_splittable = false;
+
+        const has_dices: bool = blk: {
+            if (self.text_section_index) |index| {
+                if (index != id) break :blk false;
+                if (self.data_in_code_entries.items.len == 0) break :blk false;
+                break :blk true;
+            }
+            break :blk false;
+        };
+        zld.has_dices = has_dices;
 
         next: {
             if (is_splittable) blocks: {
@@ -591,6 +633,19 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
 
             if (relocs.len > 0) {
                 try self.parseRelocs(zld, relocs, block, 0);
+            }
+
+            if (zld.has_dices) {
+                const dices = filterDice(self.data_in_code_entries.items, sect.addr, sect.addr + sect.size);
+                try block.dices.ensureTotalCapacity(dices.len);
+
+                for (dices) |dice| {
+                    block.dices.appendAssumeCapacity(.{
+                        .offset = dice.offset - try math.cast(u32, sect.addr),
+                        .length = dice.length,
+                        .kind = dice.kind,
+                    });
+                }
             }
 
             // Since this is block gets a helper local temporary symbol that didn't exist

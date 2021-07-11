@@ -114,6 +114,8 @@ stub_helper_stubs_start_off: ?u64 = null,
 
 blocks: std.AutoHashMapUnmanaged(MatchingSection, *TextBlock) = .{},
 
+has_dices: bool = false,
+
 pub const Output = struct {
     tag: enum { exe, dylib },
     path: []const u8,
@@ -131,6 +133,7 @@ pub const TextBlock = struct {
     size: u64,
     alignment: u32,
     rebases: std.ArrayList(u64),
+    dices: std.ArrayList(macho.data_in_code_entry),
     next: ?*TextBlock = null,
     prev: ?*TextBlock = null,
 
@@ -149,6 +152,7 @@ pub const TextBlock = struct {
             .size = undefined,
             .alignment = undefined,
             .rebases = std.ArrayList(u64).init(allocator),
+            .dices = std.ArrayList(macho.data_in_code_entry).init(allocator),
         };
     }
 
@@ -163,6 +167,7 @@ pub const TextBlock = struct {
         self.allocator.free(self.code);
         self.relocs.deinit();
         self.rebases.deinit();
+        self.dices.deinit();
     }
 
     pub fn resolveRelocs(self: *TextBlock, zld: *Zld) !void {
@@ -204,6 +209,9 @@ pub const TextBlock = struct {
         }
         if (self.rebases.items.len > 0) {
             log.warn("  rebases: {any}", .{self.rebases.items});
+        }
+        if (self.dices.items.len > 0) {
+            log.warn("  dices: {any}", .{self.dices.items});
         }
         log.warn("  size = {}", .{self.size});
         log.warn("  align = {}", .{self.alignment});
@@ -2071,8 +2079,7 @@ fn flush(self: *Zld) !void {
     try self.writeBindInfoTable();
     try self.writeLazyBindInfoTable();
     try self.writeExportInfo();
-    // TODO DICE for x86_64
-    // try self.writeDataInCode();
+    try self.writeDices();
 
     {
         const seg = &self.load_commands.items[self.linkedit_segment_cmd_index.?].Segment;
@@ -2606,7 +2613,9 @@ fn writeStringTable(self: *Zld) !void {
     }
 }
 
-fn writeDataInCode(self: *Zld) !void {
+fn writeDices(self: *Zld) !void {
+    if (!self.has_dices) return;
+
     const seg = &self.load_commands.items[self.linkedit_segment_cmd_index.?].Segment;
     const dice_cmd = &self.load_commands.items[self.data_in_code_cmd_index.?].LinkeditData;
     const fileoff = seg.inner.fileoff + seg.inner.filesize;
@@ -2614,24 +2623,40 @@ fn writeDataInCode(self: *Zld) !void {
     var buf = std.ArrayList(u8).init(self.allocator);
     defer buf.deinit();
 
+    var block: *TextBlock = self.blocks.get(.{
+        .seg = self.text_segment_cmd_index orelse return,
+        .sect = self.text_section_index orelse return,
+    }) orelse return;
+
+    while (block.prev) |prev| {
+        block = prev;
+    }
+
     const text_seg = self.load_commands.items[self.text_segment_cmd_index.?].Segment;
     const text_sect = text_seg.sections.items[self.text_section_index.?];
-    for (self.objects.items) |object| {
-        const source_sect = object.sections.items[object.text_section_index.?];
-        const target_map = source_sect.target_map orelse continue;
 
-        try buf.ensureCapacity(
-            buf.items.len + object.data_in_code_entries.items.len * @sizeOf(macho.data_in_code_entry),
-        );
-        for (object.data_in_code_entries.items) |dice| {
-            const new_dice: macho.data_in_code_entry = .{
-                .offset = text_sect.offset + target_map.offset + dice.offset,
-                .length = dice.length,
-                .kind = dice.kind,
-            };
-            buf.appendSliceAssumeCapacity(mem.asBytes(&new_dice));
+    while (true) {
+        if (block.dices.items.len > 0) {
+            const sym = self.locals.items[block.local_sym_index];
+            const reg = sym.payload.regular;
+            const base_off = try math.cast(u32, reg.address - text_sect.addr + text_sect.offset);
+
+            try buf.ensureUnusedCapacity(block.dices.items.len * @sizeOf(macho.data_in_code_entry));
+            for (block.dices.items) |dice| {
+                const rebased_dice = macho.data_in_code_entry{
+                    .offset = base_off + dice.offset,
+                    .length = dice.length,
+                    .kind = dice.kind,
+                };
+                buf.appendSliceAssumeCapacity(mem.asBytes(&rebased_dice));
+            }
         }
+
+        if (block.next) |next| {
+            block = next;
+        } else break;
     }
+
     const datasize = @intCast(u32, buf.items.len);
 
     dice_cmd.dataoff = @intCast(u32, fileoff);
