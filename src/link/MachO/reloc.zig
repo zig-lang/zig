@@ -333,7 +333,7 @@ pub const Relocation = struct {
     };
 
     pub const Signed = struct {
-        addend: i32,
+        addend: i64,
         correction: i4,
 
         pub fn resolve(self: Signed, base: Relocation, source_addr: u64, target_addr: u64) !void {
@@ -874,13 +874,13 @@ pub const Parser = struct {
             .X86_64_RELOC_SIGNED_4 => 4,
             else => unreachable,
         };
-        var addend = mem.readIntLittle(i32, self.block.code[parsed.offset..][0..4]) + correction;
+        var addend: i64 = mem.readIntLittle(i32, self.block.code[parsed.offset..][0..4]) + correction;
 
         if (rel.r_extern == 0) {
             const source_sym = self.zld.locals.items[self.block.local_sym_index].payload.regular;
             const source_addr = source_sym.address + parsed.offset + @intCast(u32, addend) + 4;
             const target_sym = parsed.target.payload.regular;
-            addend = try math.cast(i32, @intCast(i64, source_addr) - @intCast(i64, target_sym.address));
+            addend = @intCast(i64, source_addr) - @intCast(i64, target_sym.address);
         }
 
         parsed.payload = .{
