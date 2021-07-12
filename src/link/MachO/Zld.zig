@@ -125,7 +125,7 @@ pub const Output = struct {
 pub const TextBlock = struct {
     allocator: *Allocator,
     local_sym_index: u32,
-    aliases: ?[]u32 = null,
+    aliases: std.ArrayList(u32),
     references: std.AutoArrayHashMap(u32, void),
     contained: ?[]SymbolAtOffset = null,
     code: []u8,
@@ -146,6 +146,7 @@ pub const TextBlock = struct {
         return .{
             .allocator = allocator,
             .local_sym_index = undefined,
+            .aliases = std.ArrayList(u32).init(allocator),
             .references = std.AutoArrayHashMap(u32, void).init(allocator),
             .code = undefined,
             .relocs = std.ArrayList(Relocation).init(allocator),
@@ -157,9 +158,7 @@ pub const TextBlock = struct {
     }
 
     pub fn deinit(self: *TextBlock) void {
-        if (self.aliases) |aliases| {
-            self.allocator.free(aliases);
-        }
+        self.aliases.deinit();
         self.references.deinit();
         if (self.contained) |contained| {
             self.allocator.free(contained);
@@ -179,9 +178,9 @@ pub const TextBlock = struct {
     pub fn print_this(self: *const TextBlock, zld: *Zld) void {
         log.warn("TextBlock", .{});
         log.warn("  {}: {}", .{ self.local_sym_index, zld.locals.items[self.local_sym_index] });
-        if (self.aliases) |aliases| {
+        if (self.aliases.items.len > 0) {
             log.warn("  aliases:", .{});
-            for (aliases) |index| {
+            for (self.aliases.items) |index| {
                 log.warn("    {}: {}", .{ index, zld.locals.items[index] });
             }
         }
@@ -1082,12 +1081,10 @@ fn allocateTextBlocks(self: *Zld) !void {
             });
 
             // Update each alias (if any)
-            if (block.aliases) |aliases| {
-                for (aliases) |index| {
-                    const alias_sym = self.locals.items[index];
-                    assert(alias_sym.payload == .regular);
-                    alias_sym.payload.regular.address = base_addr;
-                }
+            for (block.aliases.items) |index| {
+                const alias_sym = self.locals.items[index];
+                assert(alias_sym.payload == .regular);
+                alias_sym.payload.regular.address = base_addr;
             }
 
             // Update each symbol contained within the TextBlock
@@ -1623,7 +1620,7 @@ fn resolveSymbols(self: *Zld) !void {
                 const tsect = &tseg.sections.items[match.sect];
                 const new_alignment = math.max(tsect.@"align", block.alignment);
                 const new_alignment_pow_2 = try math.powi(u32, 2, new_alignment);
-                const new_size = mem.alignForwardGeneric(u64, tsect.size + block.size, new_alignment_pow_2);
+                const new_size = mem.alignForwardGeneric(u64, tsect.size, new_alignment_pow_2) + block.size;
                 tsect.size = new_size;
                 tsect.@"align" = new_alignment;
 

@@ -878,9 +878,9 @@ pub const Parser = struct {
 
         if (rel.r_extern == 0) {
             const source_sym = self.zld.locals.items[self.block.local_sym_index].payload.regular;
-            const source_addr = source_sym.address + parsed.offset + @intCast(u32, addend) + 4;
+            const source_addr = source_sym.address + parsed.offset + 4;
             const target_sym = parsed.target.payload.regular;
-            addend = @intCast(i64, source_addr) - @intCast(i64, target_sym.address);
+            addend = @intCast(i64, source_addr) + addend - @intCast(i64, target_sym.address);
         }
 
         parsed.payload = .{

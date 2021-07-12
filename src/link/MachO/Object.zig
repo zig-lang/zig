@@ -431,29 +431,26 @@ const TextBlockParser = struct {
         else
             max_align;
 
-        const alias_only_indices = if (aliases.items.len > 0) blk: {
-            var out = std.ArrayList(u32).init(self.allocator);
-            try out.ensureTotalCapacity(aliases.items.len);
+        const block = try self.allocator.create(TextBlock);
+        errdefer self.allocator.destroy(block);
+
+        block.* = TextBlock.init(self.allocator);
+        block.local_sym_index = senior_nlist.index;
+        block.code = try self.allocator.dupe(u8, code);
+        block.size = size;
+        block.alignment = actual_align;
+
+        if (aliases.items.len > 0) {
+            try block.aliases.ensureTotalCapacity(aliases.items.len);
             for (aliases.items) |alias| {
-                out.appendAssumeCapacity(alias.index);
+                block.aliases.appendAssumeCapacity(alias.index);
 
                 const sym = self.zld.locals.items[alias.index];
                 const reg = &sym.payload.regular;
                 reg.segment_id = self.match.seg;
                 reg.section_id = self.match.sect;
             }
-            break :blk out.toOwnedSlice();
-        } else null;
-
-        const block = try self.allocator.create(TextBlock);
-        errdefer self.allocator.destroy(block);
-
-        block.* = TextBlock.init(self.allocator);
-        block.local_sym_index = senior_nlist.index;
-        block.aliases = alias_only_indices;
-        block.code = try self.allocator.dupe(u8, code);
-        block.size = size;
-        block.alignment = actual_align;
+        }
 
         const relocs = filterRelocs(self.relocs, start_addr, end_addr);
         if (relocs.len > 0) {
@@ -617,7 +614,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                     const tsect = &tseg.sections.items[match.sect];
                     const new_alignment = math.max(tsect.@"align", block.alignment);
                     const new_alignment_pow_2 = try math.powi(u32, 2, new_alignment);
-                    const new_size = mem.alignForwardGeneric(u64, tsect.size + block.size, new_alignment_pow_2);
+                    const new_size = mem.alignForwardGeneric(u64, tsect.size, new_alignment_pow_2) + block.size;
                     tsect.size = new_size;
                     tsect.@"align" = new_alignment;
 
@@ -653,6 +650,19 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                         }
                     }
 
+                    if (reg.address == sect.addr) {
+                        if (self.sections_as_symbols.get(sect_id)) |alias| {
+                            // Add alias.
+                            const local_sym_index = @intCast(u32, zld.locals.items.len);
+                            const reg_alias = &alias.payload.regular;
+                            reg_alias.segment_id = match.seg;
+                            reg_alias.section_id = match.sect;
+                            reg_alias.local_sym_index = local_sym_index;
+                            try block.aliases.append(local_sym_index);
+                            try zld.locals.append(zld.allocator, alias);
+                        }
+                    }
+
                     // Update target section's metadata
                     // TODO should we update segment's size here too?
                     // How does it tie with incremental space allocs?
@@ -660,7 +670,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                     const tsect = &tseg.sections.items[match.sect];
                     const new_alignment = math.max(tsect.@"align", block.alignment);
                     const new_alignment_pow_2 = try math.powi(u32, 2, new_alignment);
-                    const new_size = mem.alignForwardGeneric(u64, tsect.size + block.size, new_alignment_pow_2);
+                    const new_size = mem.alignForwardGeneric(u64, tsect.size, new_alignment_pow_2) + block.size;
                     tsect.size = new_size;
                     tsect.@"align" = new_alignment;
 
@@ -764,7 +774,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
             const tsect = &tseg.sections.items[match.sect];
             const new_alignment = math.max(tsect.@"align", block.alignment);
             const new_alignment_pow_2 = try math.powi(u32, 2, new_alignment);
-            const new_size = mem.alignForwardGeneric(u64, tsect.size + block.size, new_alignment_pow_2);
+            const new_size = mem.alignForwardGeneric(u64, tsect.size, new_alignment_pow_2) + block.size;
             tsect.size = new_size;
             tsect.@"align" = new_alignment;
 
