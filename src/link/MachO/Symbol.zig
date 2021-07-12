@@ -79,6 +79,7 @@ pub const Regular = struct {
         if (self.file) |file| {
             try std.fmt.format(writer, ".file = {s}, ", .{file.name.?});
         }
+        try std.fmt.format(writer, ".local_sym_index = {}, ", .{self.local_sym_index});
         try std.fmt.format(writer, "}}", .{});
     }
 
