@@ -115,6 +115,7 @@ stub_helper_stubs_start_off: ?u64 = null,
 blocks: std.AutoHashMapUnmanaged(MatchingSection, *TextBlock) = .{},
 
 has_dices: bool = false,
+has_stabs: bool = false,
 
 pub const Output = struct {
     tag: enum { exe, dylib },
@@ -125,6 +126,7 @@ pub const Output = struct {
 pub const TextBlock = struct {
     allocator: *Allocator,
     local_sym_index: u32,
+    stab: ?Stab = null,
     aliases: std.ArrayList(u32),
     references: std.AutoArrayHashMap(u32, void),
     contained: ?[]SymbolAtOffset = null,
@@ -140,6 +142,76 @@ pub const TextBlock = struct {
     pub const SymbolAtOffset = struct {
         local_sym_index: u32,
         offset: u64,
+        stab: ?Stab = null,
+    };
+
+    pub const Stab = union(enum) {
+        function: u64,
+        static,
+        global,
+
+        pub fn asNlists(stab: Stab, local_sym_index: u32, zld: *Zld) ![]macho.nlist_64 {
+            var nlists = std.ArrayList(macho.nlist_64).init(zld.allocator);
+            defer nlists.deinit();
+
+            const sym = zld.locals.items[local_sym_index];
+            const reg = sym.payload.regular;
+
+            switch (stab) {
+                .function => |size| {
+                    try nlists.ensureUnusedCapacity(4);
+                    const section_id = reg.sectionId(zld);
+                    nlists.appendAssumeCapacity(.{
+                        .n_strx = 0,
+                        .n_type = macho.N_BNSYM,
+                        .n_sect = section_id,
+                        .n_desc = 0,
+                        .n_value = reg.address,
+                    });
+                    nlists.appendAssumeCapacity(.{
+                        .n_strx = try zld.strtab.getOrPut(sym.name),
+                        .n_type = macho.N_FUN,
+                        .n_sect = section_id,
+                        .n_desc = 0,
+                        .n_value = reg.address,
+                    });
+                    nlists.appendAssumeCapacity(.{
+                        .n_strx = 0,
+                        .n_type = macho.N_FUN,
+                        .n_sect = 0,
+                        .n_desc = 0,
+                        .n_value = size,
+                    });
+                    nlists.appendAssumeCapacity(.{
+                        .n_strx = 0,
+                        .n_type = macho.N_ENSYM,
+                        .n_sect = section_id,
+                        .n_desc = 0,
+                        .n_value = size,
+                    });
+                },
+                .global => {
+                    try nlists.append(.{
+                        .n_strx = try zld.strtab.getOrPut(sym.name),
+                        .n_type = macho.N_GSYM,
+                        .n_sect = 0,
+                        .n_desc = 0,
+                        .n_value = 0,
+                    });
+                },
+                .static => {
+                    try nlists.append(.{
+                        .n_strx = try zld.strtab.getOrPut(sym.name),
+                        .n_type = macho.N_STSYM,
+                        .n_sect = reg.sectionId(zld),
+                        .n_desc = 0,
+                        .n_value = reg.address,
+                    });
+                },
+            }
+
+            return nlists.toOwnedSlice();
+        }
     };
 
     pub fn init(allocator: *Allocator) TextBlock {
@@ -178,6 +250,9 @@ pub const TextBlock = struct {
     pub fn print_this(self: *const TextBlock, zld: *Zld) void {
         log.warn("TextBlock", .{});
         log.warn("  {}: {}", .{ self.local_sym_index, zld.locals.items[self.local_sym_index] });
+        if (self.stab) |stab| {
+            log.warn("  stab: {}", .{stab});
+        }
         if (self.aliases.items.len > 0) {
             log.warn("  aliases:", .{});
             for (self.aliases.items) |index| {
@@ -193,10 +268,18 @@ pub const TextBlock = struct {
         if (self.contained) |contained| {
             log.warn("  contained symbols:", .{});
             for (contained) |sym_at_off| {
-                log.warn("    {}: {}\n", .{
-                    sym_at_off.offset,
-                    zld.locals.items[sym_at_off.local_sym_index],
-                });
+                if (sym_at_off.stab) |stab| {
+                    log.warn("    {}: {}, stab: {}\n", .{
+                        sym_at_off.offset,
+                        zld.locals.items[sym_at_off.local_sym_index],
+                        stab,
+                    });
+                } else {
+                    log.warn("    {}: {}\n", .{
+                        sym_at_off.offset,
+                        zld.locals.items[sym_at_off.local_sym_index],
+                    });
+                }
             }
         }
         log.warn("  code.len = {}", .{self.code.len});
@@ -2487,12 +2570,69 @@ fn writeSymbolTable(self: *Zld) !void {
     for (self.locals.items) |symbol, i| {
         if (i == 0) continue; // skip null symbol
         if (symbol.isTemp()) continue; // TODO when merging codepaths, this should go into freelist
+
         const reg = symbol.payload.regular;
         const nlist = try symbol.asNlist(self, &self.strtab);
+
         if (reg.linkage == .translation_unit) {
             try locals.append(nlist);
         } else {
             try exports.append(nlist);
+        }
+    }
+
+    if (self.has_stabs) {
+        for (self.objects.items) |object| {
+            if (object.debug_info == null) continue;
+
+            // Open scope
+            try locals.ensureUnusedCapacity(4);
+            locals.appendAssumeCapacity(.{
+                .n_strx = try self.strtab.getOrPut(object.tu_comp_dir.?),
+                .n_type = macho.N_SO,
+                .n_sect = 0,
+                .n_desc = 0,
+                .n_value = 0,
+            });
+            locals.appendAssumeCapacity(.{
+                .n_strx = try self.strtab.getOrPut(object.tu_name.?),
+                .n_type = macho.N_SO,
+                .n_sect = 0,
+                .n_desc = 0,
+                .n_value = 0,
+            });
+            locals.appendAssumeCapacity(.{
+                .n_strx = try self.strtab.getOrPut(object.name.?),
+                .n_type = macho.N_OSO,
+                .n_sect = 0,
+                .n_desc = 1,
+                .n_value = object.mtime orelse 0,
+            });
+
+            for (object.text_blocks.items) |block| {
+                if (block.stab) |stab| {
+                    const nlists = try stab.asNlists(block.local_sym_index, self);
+                    defer self.allocator.free(nlists);
+                    try locals.appendSlice(nlists);
+                } else {
+                    const contained = block.contained orelse continue;
+                    for (contained) |sym_at_off| {
+                        const stab = sym_at_off.stab orelse continue;
+                        const nlists = try stab.asNlists(sym_at_off.local_sym_index, self);
+                        defer self.allocator.free(nlists);
+                        try locals.appendSlice(nlists);
+                    }
+                }
+            }
+
+            // Close scope
+            locals.appendAssumeCapacity(.{
+                .n_strx = 0,
+                .n_type = macho.N_SO,
+                .n_sect = 0,
+                .n_desc = 0,
+                .n_value = 0,
+            });
         }
     }
 

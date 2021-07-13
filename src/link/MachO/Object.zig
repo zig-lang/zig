@@ -27,7 +27,6 @@ header: ?macho.mach_header_64 = null,
 file: ?fs.File = null,
 file_offset: ?u32 = null,
 name: ?[]const u8 = null,
-mtime: ?u64 = null,
 
 load_commands: std.ArrayListUnmanaged(LoadCommand) = .{},
 
@@ -51,8 +50,16 @@ symtab: std.ArrayListUnmanaged(macho.nlist_64) = .{},
 strtab: std.ArrayListUnmanaged(u8) = .{},
 data_in_code_entries: std.ArrayListUnmanaged(macho.data_in_code_entry) = .{},
 
+// Debug info
+debug_info: ?DebugInfo = null,
+tu_name: ?[]const u8 = null,
+tu_comp_dir: ?[]const u8 = null,
+mtime: ?u64 = null,
+
 symbols: std.ArrayListUnmanaged(*Symbol) = .{},
 sections_as_symbols: std.AutoHashMapUnmanaged(u8, *Symbol) = .{},
+
+text_blocks: std.ArrayListUnmanaged(*TextBlock) = .{},
 
 const DebugInfo = struct {
     inner: dwarf.DwarfInfo,
@@ -160,6 +167,19 @@ pub fn deinit(self: *Object) void {
     self.strtab.deinit(self.allocator);
     self.symbols.deinit(self.allocator);
     self.sections_as_symbols.deinit(self.allocator);
+    self.text_blocks.deinit(self.allocator);
+
+    if (self.debug_info) |*db| {
+        db.deinit(self.allocator);
+    }
+
+    if (self.tu_name) |n| {
+        self.allocator.free(n);
+    }
+
+    if (self.tu_comp_dir) |n| {
+        self.allocator.free(n);
+    }
 
     if (self.name) |n| {
         self.allocator.free(n);
@@ -203,6 +223,7 @@ pub fn parse(self: *Object) !void {
     try self.readLoadCommands(reader);
     try self.parseSymtab();
     try self.parseDataInCode();
+    try self.parseDebugInfo();
 }
 
 pub fn readLoadCommands(self: *Object, reader: anytype) !void {
@@ -431,11 +452,27 @@ const TextBlockParser = struct {
         else
             max_align;
 
+        const stab: ?TextBlock.Stab = if (self.object.debug_info) |di| blk: {
+            // TODO there has to be a better to handle this.
+            for (di.inner.func_list.items) |func| {
+                if (func.pc_range) |range| {
+                    if (senior_nlist.nlist.n_value >= range.start and senior_nlist.nlist.n_value < range.end) {
+                        break :blk TextBlock.Stab{
+                            .function = range.end - range.start,
+                        };
+                    }
+                }
+            }
+            if (self.zld.globals.contains(senior_sym.name)) break :blk .global;
+            break :blk .static;
+        } else null;
+
         const block = try self.allocator.create(TextBlock);
         errdefer self.allocator.destroy(block);
 
         block.* = TextBlock.init(self.allocator);
         block.local_sym_index = senior_nlist.index;
+        block.stab = stab;
         block.code = try self.allocator.dupe(u8, code);
         block.size = size;
         block.alignment = actual_align;
@@ -531,9 +568,11 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
 
         // Is there any padding between symbols within the section?
         const is_splittable = self.header.?.flags & macho.MH_SUBSECTIONS_VIA_SYMBOLS != 0;
+        // TODO is it perhaps worth skip parsing subsections in Debug mode and not worry about
+        // duplicates at all? Need some benchmarks!
         // const is_splittable = false;
 
-        const has_dices: bool = blk: {
+        zld.has_dices = blk: {
             if (self.text_section_index) |index| {
                 if (index != id) break :blk false;
                 if (self.data_in_code_entries.items.len == 0) break :blk false;
@@ -541,7 +580,7 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
             }
             break :blk false;
         };
-        zld.has_dices = has_dices;
+        zld.has_stabs = zld.has_stabs or self.debug_info != null;
 
         next: {
             if (is_splittable) blocks: {
@@ -625,6 +664,8 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                     } else {
                         try zld.blocks.putNoClobber(zld.allocator, match, block);
                     }
+
+                    try self.text_blocks.append(self.allocator, block);
                 }
 
                 var parser = TextBlockParser{
@@ -681,6 +722,8 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                     } else {
                         try zld.blocks.putNoClobber(zld.allocator, match, block);
                     }
+
+                    try self.text_blocks.append(self.allocator, block);
                 }
 
                 break :next;
@@ -758,9 +801,25 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
                     reg.segment_id = match.seg;
                     reg.section_id = match.sect;
 
+                    const stab: ?TextBlock.Stab = if (self.debug_info) |di| blk: {
+                        // TODO there has to be a better to handle this.
+                        for (di.inner.func_list.items) |func| {
+                            if (func.pc_range) |range| {
+                                if (reg.address >= range.start and reg.address < range.end) {
+                                    break :blk TextBlock.Stab{
+                                        .function = range.end - range.start,
+                                    };
+                                }
+                            }
+                        }
+                        if (zld.globals.contains(sym.name)) break :blk .global;
+                        break :blk .static;
+                    } else null;
+
                     contained.appendAssumeCapacity(.{
                         .local_sym_index = reg.local_sym_index,
                         .offset = nlist_with_index.nlist.n_value - sect.addr,
+                        .stab = stab,
                     });
                 }
 
@@ -785,6 +844,8 @@ pub fn parseTextBlocks(self: *Object, zld: *Zld) !void {
             } else {
                 try zld.blocks.putNoClobber(zld.allocator, match, block);
             }
+
+            try self.text_blocks.append(self.allocator, block);
         }
     }
 }
@@ -861,13 +922,12 @@ fn parseSymtab(self: *Object) !void {
 }
 
 pub fn parseDebugInfo(self: *Object) !void {
+    log.debug("parsing debug info in '{s}'", .{self.name.?});
+
     var debug_info = blk: {
         var di = try DebugInfo.parseFromObject(self.allocator, self);
         break :blk di orelse return;
     };
-    defer debug_info.deinit(self.allocator);
-
-    log.debug("parsing debug info in '{s}'", .{self.name.?});
 
     // We assume there is only one CU.
     const compile_unit = debug_info.inner.findCompileUnit(0x0) catch |err| switch (err) {
@@ -881,6 +941,10 @@ pub fn parseDebugInfo(self: *Object) !void {
     const name = try compile_unit.die.getAttrString(&debug_info.inner, dwarf.AT_name);
     const comp_dir = try compile_unit.die.getAttrString(&debug_info.inner, dwarf.AT_comp_dir);
 
+    self.debug_info = debug_info;
+    self.tu_name = try self.allocator.dupe(u8, name);
+    self.tu_comp_dir = try self.allocator.dupe(u8, comp_dir);
+
     if (self.mtime == null) {
         self.mtime = mtime: {
             const file = self.file orelse break :mtime 0;
@@ -888,67 +952,6 @@ pub fn parseDebugInfo(self: *Object) !void {
             break :mtime @intCast(u64, @divFloor(stat.mtime, 1_000_000_000));
         };
     }
-
-    try self.stabs.ensureUnusedCapacity(self.allocator, self.symbols.items.len + 4);
-
-    // Current dir
-    self.stabs.appendAssumeCapacity(try Symbol.Stab.new(self.allocator, comp_dir, .{
-        .kind = .so,
-        .file = self,
-    }));
-
-    // Artifact name
-    self.stabs.appendAssumeCapacity(try Symbol.Stab.new(self.allocator, name, .{
-        .kind = .so,
-        .file = self,
-    }));
-
-    // Path to object file with debug info
-    self.stabs.appendAssumeCapacity(try Symbol.Stab.new(self.allocator, self.name.?, .{
-        .kind = .oso,
-        .file = self,
-    }));
-
-    for (self.symbols.items) |sym| {
-        if (sym.cast(Symbol.Regular)) |reg| {
-            const size: u64 = blk: for (debug_info.inner.func_list.items) |func| {
-                if (func.pc_range) |range| {
-                    if (reg.address >= range.start and reg.address < range.end) {
-                        break :blk range.end - range.start;
-                    }
-                }
-            } else 0;
-
-            const stab = try Symbol.Stab.new(self.allocator, sym.name, .{
-                .kind = kind: {
-                    if (size > 0) break :kind .function;
-                    switch (reg.linkage) {
-                        .translation_unit => break :kind .static,
-                        else => break :kind .global,
-                    }
-                },
-                .size = size,
-                .symbol = sym,
-                .file = self,
-            });
-            self.stabs.appendAssumeCapacity(stab);
-        } else if (sym.cast(Symbol.Tentative)) |_| {
-            const stab = try Symbol.Stab.new(self.allocator, sym.name, .{
-                .kind = .global,
-                .size = 0,
-                .symbol = sym,
-                .file = self,
-            });
-            self.stabs.appendAssumeCapacity(stab);
-        }
-    }
-
-    // Closing delimiter.
-    const delim_stab = try Symbol.Stab.new(self.allocator, "", .{
-        .kind = .so,
-        .file = self,
-    });
-    self.stabs.appendAssumeCapacity(delim_stab);
 }
 
 pub fn parseDataInCode(self: *Object) !void {
