@@ -905,7 +905,9 @@ pub fn create(gpa: *Allocator, options: InitOptions) !*Compilation {
                 if (!use_lld and !options.target.isDarwin())
                     return error.LtoUnavailableWithoutLld;
                 break :blk explicit;
-            } else if (!use_lld and !options.target.isDarwin()) {
+            } else if (!use_lld) {
+                // TODO zig ld LTO support
+                // See https://github.com/ziglang/zig/issues/8680
                 break :blk false;
             } else if (options.c_source_files.len == 0) {
                 break :blk false;
