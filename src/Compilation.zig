@@ -842,6 +842,10 @@ pub fn create(gpa: *Allocator, options: InitOptions) !*Compilation {
 
         // Make a decision on whether to use LLD or our own linker.
         const use_lld = options.use_lld orelse blk: {
+            if (options.target.isDarwin()) {
+                break :blk false;
+            }
+
             if (!build_options.have_llvm)
                 break :blk false;
 
@@ -879,11 +883,9 @@ pub fn create(gpa: *Allocator, options: InitOptions) !*Compilation {
             break :blk false;
         };
 
-        const darwin_can_use_system_sdk =
-            // comptime conditions
-            ((build_options.have_llvm and comptime std.Target.current.isDarwin()) and
-            // runtime conditions
-            (use_lld and std.builtin.os.tag == .macos and options.target.isDarwin()));
+        const darwin_can_use_system_sdk = comptime std.Target.current.isDarwin() and
+            std.builtin.os.tag == .macos and
+            options.target.isDarwin();
 
         const sysroot = blk: {
             if (options.sysroot) |sysroot| {
@@ -900,10 +902,10 @@ pub fn create(gpa: *Allocator, options: InitOptions) !*Compilation {
 
         const lto = blk: {
             if (options.want_lto) |explicit| {
-                if (!use_lld)
+                if (!use_lld and !options.target.isDarwin())
                     return error.LtoUnavailableWithoutLld;
                 break :blk explicit;
-            } else if (!use_lld) {
+            } else if (!use_lld and !options.target.isDarwin()) {
                 break :blk false;
             } else if (options.c_source_files.len == 0) {
                 break :blk false;

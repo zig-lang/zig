@@ -1640,6 +1640,12 @@ fn buildOutputType(
         }
     }
 
+    if (use_lld) |opt| {
+        if (opt and cross_target.isDarwin()) {
+            fatal("-fLLD requested with Mach-O object format. Only the self-hosted linker is supported for this target.", .{});
+        }
+    }
+
     if (comptime std.Target.current.isDarwin()) {
         // If we want to link against frameworks, we need system headers.
         if (framework_dirs.items.len > 0 or frameworks.items.len > 0)

@@ -341,7 +341,6 @@ pub fn openPath(allocator: *Allocator, sub_path: []const u8, options: link.Optio
     assert(options.object_format == .macho);
 
     if (options.use_llvm) return error.LLVM_BackendIsTODO_ForMachO; // TODO
-    if (options.use_lld) return error.LLD_LinkingIsTODO_ForMachO; // TODO
 
     const file = try options.emit.?.directory.handle.createFile(sub_path, .{
         .truncate = false,
@@ -357,6 +356,10 @@ pub fn openPath(allocator: *Allocator, sub_path: []const u8, options: link.Optio
     }
 
     self.base.file = file;
+
+    if (options.output_mode == .Lib and options.link_mode == .Static) {
+        return self;
+    }
 
     if (!options.strip and options.module != null) {
         // Create dSYM bundle.
@@ -393,12 +396,6 @@ pub fn openPath(allocator: *Allocator, sub_path: []const u8, options: link.Optio
         .n_value = 0,
     });
 
-    switch (options.output_mode) {
-        .Exe => {},
-        .Obj => {},
-        .Lib => return error.TODOImplementWritingLibFiles,
-    }
-
     try self.populateMissingMetadata();
     try self.writeLocalSymbol(0);
 
@@ -428,6 +425,15 @@ pub fn createEmpty(gpa: *Allocator, options: link.Options) !*MachO {
 }
 
 pub fn flush(self: *MachO, comp: *Compilation) !void {
+    if (self.base.options.output_mode == .Lib and self.base.options.link_mode == .Static) {
+        if (build_options.have_llvm) {
+            return self.base.linkAsArchive(comp);
+        } else {
+            log.err("TODO: non-LLVM archiver for MachO object files", .{});
+            return error.TODOImplementWritingStaticLibFiles;
+        }
+    }
+
     if (build_options.have_llvm and self.base.options.use_lld) {
         return self.linkWithZld(comp);
     } else {
