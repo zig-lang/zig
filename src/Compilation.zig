@@ -883,9 +883,10 @@ pub fn create(gpa: *Allocator, options: InitOptions) !*Compilation {
             break :blk false;
         };
 
-        const darwin_can_use_system_sdk = comptime std.Target.current.isDarwin() and
-            std.builtin.os.tag == .macos and
-            options.target.isDarwin();
+        const darwin_can_use_system_sdk = blk: {
+            if (comptime !std.Target.current.isDarwin()) break :blk false;
+            break :blk std.builtin.os.tag == .macos and options.target.isDarwin();
+        };
 
         const sysroot = blk: {
             if (options.sysroot) |sysroot| {

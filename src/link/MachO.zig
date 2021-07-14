@@ -434,7 +434,7 @@ pub fn flush(self: *MachO, comp: *Compilation) !void {
         }
     }
 
-    if (build_options.have_llvm and self.base.options.use_lld) {
+    if (build_options.have_llvm) {
         return self.linkWithZld(comp);
     } else {
         switch (self.base.options.effectiveOutputMode()) {
