@@ -5,15 +5,14 @@
 // and substantial portions of the software.
 
 const std = @import("../std.zig");
+const deadline = @import("deadline.zig");
 const target = std.Target.current;
 const Atomic = std.atomic.Atomic;
 const Futex = std.Thread.Futex;
 
 const Mutex = @This();
-const Impl = if (std.builtin.single_threaded and !std.debug.runtime_safety) 
-    FastSerialMutexImpl
-else if (std.builtin.single_threaded)
-    SafeSerialMutexImpl
+const Impl = if (std.builtin.single_threaded)
+    SerialMutexImpl
 else if (target.cpu.arch.isX86())
     X86MutexImpl
 else 
@@ -44,47 +43,28 @@ pub const Held = extern struct {
     }
 };
 
-const FastSerialMutexImpl = extern struct {
+const SerialMutexImpl = extern struct {
+    locked: bool = false,
+
     fn tryAcquire(self: *Impl) bool {
+        if (self.locked) return false;
+        self.locked = true;
         return true;
     }
 
     fn acquire(self: *Impl) void {
-        // no-op
+        assert(self.tryAcquire());
     }
 
     fn timedAcquire(self: *Impl, timeout_ns: u64) error{TimedOut}!void {
-        // no-op
+       if (self.tryAcquire()) return;
+       std.time.sleep(timeout_ns);
+       return error.TimedOut;
     }
 
     fn release(self: *Impl) void {
-        // no-op
-    }
-};
-
-const SafeSerialMutexImpl = extern struct {
-    is_acquired: bool = false,
-
-    fn tryAcquire(self: *Impl) bool {
-        if (self.is_acquired) return false;
-        self.is_acquired = true;
-        return true;
-    }
-
-    fn acquire(self: *Impl) void {
-        if (self.is_acquired) @panic("deadlock detected");
-        self.is_acquired = true;
-    }
-
-    fn timedAcquire(self: *Impl, timeout_ns: u64) error{TimedOut}!void {
-        if (self.is_acquired) return;
-        std.time.sleep(timeout_ns);
-        return error.TimedOut;
-    }
-
-    fn release(self: *Impl) void {
-        if (!self.is_acquired) @panic("unlocked an unlocked mutex");
-        self.is_acquired = false;
+        assert(self.locked);
+        self.locked = false;
     }
 };
 
@@ -95,7 +75,9 @@ const X86MutexImpl = extern struct {
             locked: Atomic(u8),
             contended: Atomic(u8),
         },
-    } = .{ .dword = Atomic(u32).init(UNLOCKED) },
+    } = .{
+        .dword = Atomic(u32).init(UNLOCKED),
+    },
 
     const UNLOCKED = 0;
     const LOCKED = 1 << 0;
@@ -116,45 +98,56 @@ const X86MutexImpl = extern struct {
         return self.acquireSlow(timeout_ns);
     }
 
-    fn acquireSlow(self: *Impl, maybe_timeout_ns: ?u64) error{TimedOut}!void {
+    fn acquireSlow(self: *Impl, timeout_ns: anytype) error{TimedOut}!void {
         @setCold(true);
+
+        // create a deadline in which the timeout actually expires
+        var deadline_ns: u64 = undefined;
+        if (@TypeOf(timeout_ns) == u64) {
+            deadline_ns = std.time.now() + timeout_ns;
+        }
 
         var spin: u8 = 100;
         while (spin > 0) : (spin -= 1) {
             std.atomic.spinLoopHint();
 
-            const state = self.state.load(.Monotonic);
-            if (state & CONTENDED != 0) {
+            const dword = self.state.dword.load(.Monotonic);
+            if (dword & CONTENDED != 0) {
                 break;
             }
 
-            if (state & LOCKED != 0) continue;
+            if (dword & LOCKED != 0) continue;
             if (self.tryAcquire()) {
                 return;
             }
         }
 
-        // create a deadline in which the timeout actually expires
-        const maybe_deadline = blk: {
-            const timeout_ns = maybe_timeout_ns orelse break :blk null;
-            break :blk std.time.now() + timeout_ns;
-        };
-
         while (true) {
-            const state = self.state.load(.Monotonic);
-            if (state != CONTENDED | LOCKED) {
-                state = self.state.swap(CONTENDED | LOCKED, .Acquire);
-                if (state & LOCKED == 0) {
+            std.atomic.spinLoopHint();
+            
+            // Transition the Mutex to CONTENDED, which assumes it's LOCKED (so LOCKED | CONTENDED).
+            // Transitioning to LOCKED | CONTENDED when not LOCKED also acquires the Mutex.
+            var dword = self.state.dword.load(.Monotonic);
+            if (dword != LOCKED | CONTENDED) {
+                dword = self.state.dword.swap(LOCKED | CONTENDED, .Acquire);
+                if (dword & LOCKED == 0) {
                     return;
                 }
             }
 
-            try Futex.wait(&self.state, CONTENDED | LOCKED, blk: {
-                const deadline = maybe_deadline orelse break :blk null;
-                const timestamp = std.time.now();
-                if (timestamp >= deadline) return error.TimedOut;
-                break :blk deadline - timestamp;
-            });
+            // Figure out the actual timeout for sleeping on the futex using the deadline
+            var timeout: ?u64 = null;
+            if (@TypeOf(timeout_ns) == u64) {
+                const now_ns = std.time.now();
+                if (now_ns >= deadline_ns) return error.TimedOut;
+                timeout = deadline_ns - now_ns;
+            }
+
+            try Futex.wait(
+                &self.state.dword, 
+                LOCKED | CONTENDED, 
+                timeout,
+            );
         }
     }
 
@@ -239,14 +232,14 @@ const MutexImpl = extern struct {
         ) == null;
     }
 
-    fn acquireSlow(self: *Impl, maybe_timeout_ns: ?u64) error{TimedOut}!void {
+    fn acquireSlow(self: *Impl, timeout_ns: anytype) error{TimedOut}!void {
         @setCold(true);
 
         // create a deadline in which the timeout actually expires
-        const maybe_deadline = blk: {
-            const timeout_ns = maybe_timeout_ns orelse break :blk null;
-            break :blk std.time.now() + timeout_ns;
-        };
+        var deadline_ns: u64 = undefined;
+        if (@TypeOf(timeout_ns) == u64) {
+            deadline_ns = std.time.now() + timeout_ns;
+        }
 
         var spin: u8 = 10;
         var acquire_state = LOCKED;
@@ -295,12 +288,19 @@ const MutexImpl = extern struct {
                 }
             }
 
-            try Futex.wait(&self.state, CONTENDED, blk: {
-                const deadline = maybe_deadline orelse break :blk null;
-                const timestamp = std.time.now();
-                if (timestamp >= deadline) return error.TimedOut;
-                break :blk deadline - timestamp;
-            });
+            // Figure out the actual timeout for sleeping on the futex using the deadline
+            var timeout: ?u64 = null;
+            if (@TypeOf(timeout_ns) == u64) {
+                const now_ns = std.time.now();
+                if (now_ns >= deadline_ns) return error.TimedOut;
+                timeout = deadline_ns - now_ns;
+            }
+
+            try Futex.wait(
+                &self.state, 
+                CONTENDED, 
+                timeout,
+            );
 
             spin = 10;
             acquire_state = CONTENDED;

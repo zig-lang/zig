@@ -268,9 +268,9 @@ pub fn now() u64 {
     };
 
     const MonotonicProperty = struct {
-        var mutex = std.Thread.Mutex{};
+        var last_lock = std.Thread.Mutex{};
         var last_value = std.atomic.Atomic(u64).init(0);
-
+        
         // https://doc.rust-lang.org/src/std/time.rs.html#220-260
         const is_already_monotonic = switch (std.Target.current.os.tag) {
             .windows => false,
@@ -286,37 +286,27 @@ pub fn now() u64 {
             if (is_already_monotonic) {
                 return value;
             }
-
+            
             if (@sizeOf(usize) >= @sizeOf(u64)) {
-                return applyLockFree(value);
+                var last = last_value.load(.Monotonic);
+                while (true) {
+                    if (value <= last) return last;
+                    last = last_value.tryCompareAndSwap(
+                        last,
+                        value,
+                        .Monotonic,
+                        .Monotonic,
+                    ) orelse return value;
+                }
             }
 
-            self.mutex.acquire();
-            defer self.mutex.release();
+            last_lock.acquire();
+            defer last_lock.release();
 
             const last = last_value.loadUnchecked();
-            if (value <= last) {
-                return last;
-            }
-
+            if (value <= last) return last;
             last_value.storeUnchecked(value);
             return value;
-        } 
-
-        fn applyLockFree(value: u64) u64 {
-            var last = last_value.load(.Monotonic);
-            while (true) {
-                if (value <= last) {
-                    return last;
-                }
-
-                last = last_value.tryCompareAndSwap(
-                    last,
-                    value,
-                    .Monotonic,
-                    .Monotonic,
-                ) orelse return value;
-            }
         }
     };
 

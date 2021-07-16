@@ -105,10 +105,10 @@ const SemaphoreImpl = struct {
     fn waiForPost(self: *Impl, maybe_timeout_ns: u64) error{TimedOut}!void {
         @setCold(true);
 
-        const maybe_deadline = blk: {
-            const timeout_ns = maybe_timeout_ns orelse break :blk null;
-            break :blk std.time.now() + timeout_ns;
-        };
+        var deadline_ns: u64 = undefined;
+        if (@TypeOf(timeout_ns) == u64) {
+            deadline_ns = std.time.now() + timeout_ns;
+        }
 
         var spin: u8 = 10;
         var acquire_with: u32 = 0;
@@ -148,12 +148,19 @@ const SemaphoreImpl = struct {
                 }
             }
 
-            try Futex.wait(&self.state, state | IS_WAITING, blk: {
-                const deadline = maybe_deadline orelse break :blk null;
-                const timestamp = std.time.now();
-                if (timestamp >= deadline) return error.TimedOut;
-                break :blk deadline - timestamp;
-            });
+            // Figure out the actual timeout for sleeping on the futex using the deadline
+            var timeout: ?u64 = null;
+            if (@TypeOf(timeout_ns) == u64) {
+                const now_ns = std.time.now();
+                if (now_ns >= deadline_ns) return error.TimedOut;
+                timeout = deadline_ns - now_ns;
+            }
+
+            try Futex.wait(
+                &self.state, 
+                state | IS_WAITING, 
+                timeout,
+            );
 
             state = self.state.load(.Monotonic);
             acquire_with = IS_WAITING;
