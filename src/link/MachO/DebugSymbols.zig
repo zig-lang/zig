@@ -17,7 +17,7 @@ const Type = @import("../../type.zig").Type;
 const link = @import("../../link.zig");
 const MachO = @import("../MachO.zig");
 const SrcFn = MachO.SrcFn;
-const TextBlock = MachO.TextBlock;
+const Atom = MachO.Atom;
 const padToIdeal = MachO.padToIdeal;
 
 usingnamespace @import("commands.zig");
@@ -64,16 +64,16 @@ debug_line_section_index: ?u16 = null,
 debug_abbrev_table_offset: ?u64 = null,
 
 /// A list of `SrcFn` whose Line Number Programs have surplus capacity.
-/// This is the same concept as `text_block_free_list`; see those doc comments.
+/// This is the same concept as `atom_free_list`; see those doc comments.
 dbg_line_fn_free_list: std.AutoHashMapUnmanaged(*SrcFn, void) = .{},
 dbg_line_fn_first: ?*SrcFn = null,
 dbg_line_fn_last: ?*SrcFn = null,
 
-/// A list of `TextBlock` whose corresponding .debug_info tags have surplus capacity.
-/// This is the same concept as `text_block_free_list`; see those doc comments.
-dbg_info_decl_free_list: std.AutoHashMapUnmanaged(*TextBlock, void) = .{},
-dbg_info_decl_first: ?*TextBlock = null,
-dbg_info_decl_last: ?*TextBlock = null,
+/// A list of `Atom` whose corresponding .debug_info tags have surplus capacity.
+/// This is the same concept as `atom_free_list`; see those doc comments.
+dbg_info_decl_free_list: std.AutoHashMapUnmanaged(*Atom, void) = .{},
+dbg_info_decl_first: ?*Atom = null,
+dbg_info_decl_last: ?*Atom = null,
 
 /// Table of debug symbol names aka the debug string table.
 debug_string_table: std.ArrayListUnmanaged(u8) = .{},
@@ -981,7 +981,7 @@ pub fn commitDeclDebugInfo(
     var dbg_info_type_relocs = &debug_buffers.dbg_info_type_relocs;
 
     const symbol = self.base.locals.items[decl.link.macho.local_sym_index];
-    const text_block = &decl.link.macho;
+    const atom = &decl.link.macho;
     // If the Decl is a function, we need to update the __debug_line program.
     assert(decl.has_tv);
     switch (decl.ty.zigTypeTag()) {
@@ -997,14 +997,14 @@ pub fn commitDeclDebugInfo(
             }
             {
                 const ptr = dbg_info_buffer.items[getRelocDbgInfoSubprogramHighPC()..][0..4];
-                mem.writeIntLittle(u32, ptr, @intCast(u32, text_block.size));
+                mem.writeIntLittle(u32, ptr, @intCast(u32, atom.size));
             }
 
             {
                 // Advance line and PC.
                 // TODO encapsulate logic in a helper function.
                 try dbg_line_buffer.append(DW.LNS_advance_pc);
-                try leb.writeULEB128(dbg_line_buffer.writer(), text_block.size);
+                try leb.writeULEB128(dbg_line_buffer.writer(), atom.size);
 
                 try dbg_line_buffer.append(DW.LNS_advance_line);
                 const func = decl.val.castTag(.function).?.data;
@@ -1017,7 +1017,7 @@ pub fn commitDeclDebugInfo(
             // Now we have the full contents and may allocate a region to store it.
 
             // This logic is nearly identical to the logic below in `updateDeclDebugInfo` for
-            // `TextBlock` and the .debug_info. If you are editing this logic, you
+            // `Atom` and the .debug_info. If you are editing this logic, you
             // probably need to edit that logic too.
 
             const dwarf_segment = &self.load_commands.items[self.dwarf_segment_cmd_index.?].Segment;
@@ -1113,7 +1113,7 @@ pub fn commitDeclDebugInfo(
         }
     }
 
-    try self.updateDeclDebugInfoAllocation(allocator, text_block, @intCast(u32, dbg_info_buffer.items.len));
+    try self.updateDeclDebugInfoAllocation(allocator, atom, @intCast(u32, dbg_info_buffer.items.len));
 
     {
         // Now that we have the offset assigned we can finally perform type relocations.
@@ -1123,13 +1123,13 @@ pub fn commitDeclDebugInfo(
                 mem.writeIntLittle(
                     u32,
                     dbg_info_buffer.items[off..][0..4],
-                    text_block.dbg_info_off + value.off,
+                    atom.dbg_info_off + value.off,
                 );
             }
         }
     }
 
-    try self.writeDeclDebugInfo(text_block, dbg_info_buffer.items);
+    try self.writeDeclDebugInfo(atom, dbg_info_buffer.items);
 }
 
 /// Asserts the type has codegen bits.
@@ -1179,7 +1179,7 @@ fn addDbgInfoType(
 fn updateDeclDebugInfoAllocation(
     self: *DebugSymbols,
     allocator: *Allocator,
-    text_block: *TextBlock,
+    atom: *Atom,
     len: u32,
 ) !void {
     const tracy = trace(@src());
@@ -1191,48 +1191,48 @@ fn updateDeclDebugInfoAllocation(
 
     const dwarf_segment = &self.load_commands.items[self.dwarf_segment_cmd_index.?].Segment;
     const debug_info_sect = &dwarf_segment.sections.items[self.debug_info_section_index.?];
-    text_block.dbg_info_len = len;
+    atom.dbg_info_len = len;
     if (self.dbg_info_decl_last) |last| blk: {
-        if (text_block == last) break :blk;
-        if (text_block.dbg_info_next) |next| {
+        if (atom == last) break :blk;
+        if (atom.dbg_info_next) |next| {
             // Update existing Decl - non-last item.
-            if (text_block.dbg_info_off + text_block.dbg_info_len + min_nop_size > next.dbg_info_off) {
+            if (atom.dbg_info_off + atom.dbg_info_len + min_nop_size > next.dbg_info_off) {
                 // It grew too big, so we move it to a new location.
-                if (text_block.dbg_info_prev) |prev| {
+                if (atom.dbg_info_prev) |prev| {
                     self.dbg_info_decl_free_list.put(allocator, prev, {}) catch {};
-                    prev.dbg_info_next = text_block.dbg_info_next;
+                    prev.dbg_info_next = atom.dbg_info_next;
                 }
-                next.dbg_info_prev = text_block.dbg_info_prev;
-                text_block.dbg_info_next = null;
+                next.dbg_info_prev = atom.dbg_info_prev;
+                atom.dbg_info_next = null;
                 // Populate where it used to be with NOPs.
-                const file_pos = debug_info_sect.offset + text_block.dbg_info_off;
-                try self.pwriteDbgInfoNops(0, &[0]u8{}, text_block.dbg_info_len, false, file_pos);
+                const file_pos = debug_info_sect.offset + atom.dbg_info_off;
+                try self.pwriteDbgInfoNops(0, &[0]u8{}, atom.dbg_info_len, false, file_pos);
                 // TODO Look at the free list before appending at the end.
-                text_block.dbg_info_prev = last;
-                last.dbg_info_next = text_block;
-                self.dbg_info_decl_last = text_block;
+                atom.dbg_info_prev = last;
+                last.dbg_info_next = atom;
+                self.dbg_info_decl_last = atom;
 
-                text_block.dbg_info_off = last.dbg_info_off + padToIdeal(last.dbg_info_len);
+                atom.dbg_info_off = last.dbg_info_off + padToIdeal(last.dbg_info_len);
             }
-        } else if (text_block.dbg_info_prev == null) {
+        } else if (atom.dbg_info_prev == null) {
             // Append new Decl.
             // TODO Look at the free list before appending at the end.
-            text_block.dbg_info_prev = last;
-            last.dbg_info_next = text_block;
-            self.dbg_info_decl_last = text_block;
+            atom.dbg_info_prev = last;
+            last.dbg_info_next = atom;
+            self.dbg_info_decl_last = atom;
 
-            text_block.dbg_info_off = last.dbg_info_off + padToIdeal(last.dbg_info_len);
+            atom.dbg_info_off = last.dbg_info_off + padToIdeal(last.dbg_info_len);
         }
     } else {
         // This is the first Decl of the .debug_info
-        self.dbg_info_decl_first = text_block;
-        self.dbg_info_decl_last = text_block;
+        self.dbg_info_decl_first = atom;
+        self.dbg_info_decl_last = atom;
 
-        text_block.dbg_info_off = padToIdeal(self.dbgInfoNeededHeaderBytes());
+        atom.dbg_info_off = padToIdeal(self.dbgInfoNeededHeaderBytes());
     }
 }
 
-fn writeDeclDebugInfo(self: *DebugSymbols, text_block: *TextBlock, dbg_info_buf: []const u8) !void {
+fn writeDeclDebugInfo(self: *DebugSymbols, atom: *Atom, dbg_info_buf: []const u8) !void {
     const tracy = trace(@src());
     defer tracy.end();
 
@@ -1266,21 +1266,21 @@ fn writeDeclDebugInfo(self: *DebugSymbols, text_block: *TextBlock, dbg_info_buf:
         self.load_commands_dirty = true; // TODO look into making only the one section dirty
         self.debug_info_header_dirty = true;
     }
-    const prev_padding_size: u32 = if (text_block.dbg_info_prev) |prev|
-        text_block.dbg_info_off - (prev.dbg_info_off + prev.dbg_info_len)
+    const prev_padding_size: u32 = if (atom.dbg_info_prev) |prev|
+        atom.dbg_info_off - (prev.dbg_info_off + prev.dbg_info_len)
     else
         0;
-    const next_padding_size: u32 = if (text_block.dbg_info_next) |next|
-        next.dbg_info_off - (text_block.dbg_info_off + text_block.dbg_info_len)
+    const next_padding_size: u32 = if (atom.dbg_info_next) |next|
+        next.dbg_info_off - (atom.dbg_info_off + atom.dbg_info_len)
     else
         0;
 
     // To end the children of the decl tag.
-    const trailing_zero = text_block.dbg_info_next == null;
+    const trailing_zero = atom.dbg_info_next == null;
 
     // We only have support for one compilation unit so far, so the offsets are directly
     // from the .debug_info section.
-    const file_pos = debug_info_sect.offset + text_block.dbg_info_off;
+    const file_pos = debug_info_sect.offset + atom.dbg_info_off;
     try self.pwriteDbgInfoNops(prev_padding_size, dbg_info_buf, next_padding_size, trailing_zero, file_pos);
 }
 

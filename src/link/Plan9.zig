@@ -33,6 +33,9 @@ hdr: aout.ExecHdr = undefined,
 entry_decl: ?*Module.Decl = null,
 
 got: std.ArrayListUnmanaged(u64) = .{},
+
+atoms: std.ArrayListUnmanaged(*Atom) = .{},
+
 const Bases = struct {
     text: u64,
     /// the addr of the got
@@ -59,7 +62,8 @@ fn getSymAddr(self: Plan9, s: aout.Sym) u64 {
     return self.getAddr(s.value, s.type);
 }
 
-pub const DeclBlock = struct {
+pub const Atom = struct {
+    base: File.Atom = .{ .tag = .plan9 },
     type: aout.Sym.Type,
     /// offset in the text or data sects
     offset: ?u64,
@@ -67,7 +71,10 @@ pub const DeclBlock = struct {
     sym_index: ?usize,
     /// offset into got
     got_index: ?usize,
-    pub const empty = DeclBlock{
+
+    pub const base_atom_tag: File.Tag = .plan9;
+
+    pub const empty = Atom{
         .type = .t,
         .offset = null,
         .sym_index = null,
@@ -320,6 +327,11 @@ pub fn deinit(self: *Plan9) void {
     self.text_buf.deinit(self.base.allocator);
     self.data_buf.deinit(self.base.allocator);
     self.got.deinit(self.base.allocator);
+
+    for (self.atoms.items) |atom| {
+        self.base.allocator.destroy(atom);
+    }
+    self.atoms.deinit(self.base.allocator);
 }
 
 pub const Export = ?usize;
@@ -380,4 +392,11 @@ pub fn writeSyms(self: *Plan9, buf: *std.ArrayList(u8)) !void {
 pub fn allocateDeclIndexes(self: *Plan9, decl: *Module.Decl) !void {
     try self.got.append(self.base.allocator, 0xdeadbeef);
     decl.link.plan9.got_index = self.got.items.len - 1;
+}
+
+pub fn createAtom(self: *Plan9) !*File.Atom {
+    const atom = try self.base.allocator.create(Atom);
+    atom.* = Atom.empty;
+    try self.atoms.append(self.base.allocator, atom);
+    return &atom.base;
 }

@@ -20,14 +20,24 @@ base: link.File,
 /// in the flush function, stitching pre-rendered pieces of C code together.
 decl_table: std.AutoArrayHashMapUnmanaged(*Module.Decl, void) = .{},
 
+atoms: std.ArrayListUnmanaged(*Atom) = .{},
+
 /// Per-declaration data. For functions this is the body, and
 /// the forward declaration is stored in the FnBlock.
-pub const DeclBlock = struct {
+pub const Atom = struct {
+    base: link.File.Atom = .{ .tag = .c },
+
     code: std.ArrayListUnmanaged(u8),
 
-    pub const empty: DeclBlock = .{
+    pub const base_atom_tag: link.File.Tag = .c;
+
+    pub const empty: Atom = .{
         .code = .{},
     };
+
+    fn deinit(self: *Atom, allocator: *Allocator) void {
+        self.code.deinit(allocator);
+    }
 };
 
 /// Per-function data.
@@ -74,6 +84,12 @@ pub fn deinit(self: *C) void {
         deinitDecl(self.base.allocator, key);
     }
     self.decl_table.deinit(self.base.allocator);
+
+    for (self.atoms.items) |atom| {
+        atom.deinit(self.base.allocator);
+        self.base.allocator.destroy(atom);
+    }
+    self.atoms.deinit(self.base.allocator);
 }
 
 pub fn allocateDeclIndexes(self: *C, decl: *Module.Decl) !void {
@@ -87,7 +103,6 @@ pub fn freeDecl(self: *C, decl: *Module.Decl) void {
 }
 
 fn deinitDecl(gpa: *Allocator, decl: *Module.Decl) void {
-    decl.link.c.code.deinit(gpa);
     decl.fn_link.c.fwd_decl.deinit(gpa);
     for (decl.fn_link.c.typedefs.values()) |value| {
         gpa.free(value.rendered);
@@ -310,4 +325,11 @@ pub fn updateDeclExports(
     _ = decl;
     _ = module;
     _ = self;
+}
+
+pub fn createAtom(self: *C) !*File.Atom {
+    const atom = try self.base.allocator.create(Atom);
+    atom.* = Atom.empty;
+    try self.atoms.append(self.base.allocator, atom);
+    return &atom.base;
 }

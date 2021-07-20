@@ -137,14 +137,13 @@ pub const File = struct {
     /// of this linking operation.
     lock: ?Cache.Lock = null,
 
-    pub const LinkBlock = union {
-        elf: Elf.TextBlock,
-        coff: Coff.TextBlock,
-        macho: MachO.TextBlock,
-        plan9: Plan9.DeclBlock,
-        c: C.DeclBlock,
-        wasm: Wasm.DeclBlock,
-        spirv: void,
+    pub const Atom = struct {
+        tag: File.Tag,
+
+        pub fn cast(base: *Atom, comptime T: type) ?*T {
+            if (base.tag != T.base_atom_tag) return null;
+            return @fieldParentPtr(T, "base", base);
+        }
     };
 
     pub const LinkFn = union {
@@ -238,6 +237,18 @@ pub const File = struct {
         }
 
         return file;
+    }
+
+    pub fn createAtom(base: *File) !*Atom {
+        return switch (base.tag) {
+            .coff => @fieldParentPtr(Coff, "base", base).createAtom(),
+            .elf => @fieldParentPtr(Elf, "base", base).createAtom(),
+            .macho => @fieldParentPtr(MachO, "base", base).createAtom(),
+            .plan9 => @fieldParentPtr(Plan9, "base", base).createAtom(),
+            .c => @fieldParentPtr(C, "base", base).createAtom(),
+            .wasm => @fieldParentPtr(Wasm, "base", base).createAtom(),
+            .spirv => @fieldParentPtr(SpirV, "base", base).createAtom(),
+        };
     }
 
     pub fn cast(base: *File, comptime T: type) ?*T {

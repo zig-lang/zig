@@ -2288,11 +2288,12 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
                                 const ptr_bytes: u64 = @divExact(ptr_bits, 8);
                                 const got_addr = if (self.bin_file.cast(link.File.Elf)) |elf_file| blk: {
                                     const got = &elf_file.program_headers.items[elf_file.phdr_got_index.?];
-                                    break :blk @intCast(u32, got.p_vaddr + func.owner_decl.link.elf.offset_table_index * ptr_bytes);
-                                } else if (self.bin_file.cast(link.File.Coff)) |coff_file|
-                                    @intCast(u32, coff_file.offset_table_virtual_address + func.owner_decl.link.coff.offset_table_index * ptr_bytes)
-                                else
-                                    unreachable;
+                                    const atom = func.owner_decl.link.cast(link.File.Elf.Atom).?;
+                                    break :blk @intCast(u32, got.p_vaddr + atom.offset_table_index * ptr_bytes);
+                                } else if (self.bin_file.cast(link.File.Coff)) |coff_file| blk: {
+                                    const atom = func.owner_decl.link.cast(link.File.Coff.Atom).?;
+                                    break :blk @intCast(u32, coff_file.offset_table_virtual_address + atom.offset_table_index * ptr_bytes);
+                                } else unreachable;
 
                                 // ff 14 25 xx xx xx xx    call [addr]
                                 try self.code.ensureCapacity(self.code.items.len + 7);
@@ -2318,11 +2319,12 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
                                 const ptr_bytes: u64 = @divExact(ptr_bits, 8);
                                 const got_addr = if (self.bin_file.cast(link.File.Elf)) |elf_file| blk: {
                                     const got = &elf_file.program_headers.items[elf_file.phdr_got_index.?];
-                                    break :blk @intCast(u32, got.p_vaddr + func.owner_decl.link.elf.offset_table_index * ptr_bytes);
-                                } else if (self.bin_file.cast(link.File.Coff)) |coff_file|
-                                    coff_file.offset_table_virtual_address + func.owner_decl.link.coff.offset_table_index * ptr_bytes
-                                else
-                                    unreachable;
+                                    const atom = func.owner_decl.link.cast(link.File.Elf.Atom).?;
+                                    break :blk @intCast(u32, got.p_vaddr + atom.offset_table_index * ptr_bytes);
+                                } else if (self.bin_file.cast(link.File.Coff)) |coff_file| blk: {
+                                    const atom = func.owner_decl.link.cast(link.File.Coff.Atom).?;
+                                    break :blk coff_file.offset_table_virtual_address + atom.offset_table_index * ptr_bytes;
+                                } else unreachable;
 
                                 try self.genSetReg(inst.base.src, Type.initTag(.usize), .ra, .{ .memory = got_addr });
                                 mem.writeIntLittle(u32, try self.code.addManyAsArray(4), Instruction.jalr(.ra, 0, .ra).toU32());
@@ -2373,11 +2375,12 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
                                 const ptr_bytes: u64 = @divExact(ptr_bits, 8);
                                 const got_addr = if (self.bin_file.cast(link.File.Elf)) |elf_file| blk: {
                                     const got = &elf_file.program_headers.items[elf_file.phdr_got_index.?];
-                                    break :blk @intCast(u32, got.p_vaddr + func.owner_decl.link.elf.offset_table_index * ptr_bytes);
-                                } else if (self.bin_file.cast(link.File.Coff)) |coff_file|
-                                    coff_file.offset_table_virtual_address + func.owner_decl.link.coff.offset_table_index * ptr_bytes
-                                else
-                                    unreachable;
+                                    const atom = func.owner_decl.link.cast(link.File.Elf.Atom).?;
+                                    break :blk @intCast(u32, got.p_vaddr + atom.offset_table_index * ptr_bytes);
+                                } else if (self.bin_file.cast(link.File.Coff)) |coff_file| blk: {
+                                    const atom = func.owner_decl.link.cast(link.File.Coff.Atom).?;
+                                    break :blk coff_file.offset_table_virtual_address + atom.offset_table_index * ptr_bytes;
+                                } else unreachable;
 
                                 try self.genSetReg(inst.base.src, Type.initTag(.usize), .lr, .{ .memory = got_addr });
 
@@ -2436,11 +2439,12 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
                                 const ptr_bytes: u64 = @divExact(ptr_bits, 8);
                                 const got_addr = if (self.bin_file.cast(link.File.Elf)) |elf_file| blk: {
                                     const got = &elf_file.program_headers.items[elf_file.phdr_got_index.?];
-                                    break :blk @intCast(u32, got.p_vaddr + func.owner_decl.link.elf.offset_table_index * ptr_bytes);
-                                } else if (self.bin_file.cast(link.File.Coff)) |coff_file|
-                                    coff_file.offset_table_virtual_address + func.owner_decl.link.coff.offset_table_index * ptr_bytes
-                                else
-                                    unreachable;
+                                    const atom = func.owner_decl.link.cast(link.File.Elf.Atom).?;
+                                    break :blk @intCast(u32, got.p_vaddr + atom.offset_table_index * ptr_bytes);
+                                } else if (self.bin_file.cast(link.File.Coff)) |coff_file| blk: {
+                                    const atom = func.owner_decl.link.cast(link.File.Coff.Atom).?;
+                                    break :blk coff_file.offset_table_virtual_address + atom.offset_table_index * ptr_bytes;
+                                } else unreachable;
 
                                 try self.genSetReg(inst.base.src, Type.initTag(.usize), .x30, .{ .memory = got_addr });
 
@@ -2500,7 +2504,8 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
                         const got_addr = blk: {
                             const seg = macho_file.load_commands.items[macho_file.data_const_segment_cmd_index.?].Segment;
                             const got = seg.sections.items[macho_file.got_section_index.?];
-                            break :blk got.addr + func.owner_decl.link.macho.offset_table_index * @sizeOf(u64);
+                            const atom = func.owner_decl.link.cast(link.File.MachO.Atom).?;
+                            break :blk got.addr + atom.offset_table_index * @sizeOf(u64);
                         };
                         log.debug("got_addr = 0x{x}", .{got_addr});
                         switch (arch) {
@@ -2596,7 +2601,8 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
                                 const ptr_bits = self.target.cpu.arch.ptrBitWidth();
                                 const ptr_bytes: u64 = @divExact(ptr_bits, 8);
                                 const got_addr = p9.bases.data;
-                                const got_index = func_payload.data.owner_decl.link.plan9.got_index.?;
+                                const atom = func_payload.data.owner_decl.link.cast(link.File.Plan9.Atom).?;
+                                const got_index = atom.got_index.?;
                                 // ff 14 25 xx xx xx xx    call [addr]
                                 try self.code.ensureCapacity(self.code.items.len + 7);
                                 self.code.appendSliceAssumeCapacity(&[3]u8{ 0xff, 0x14, 0x25 });
@@ -2642,7 +2648,8 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
                                 const ptr_bits = self.target.cpu.arch.ptrBitWidth();
                                 const ptr_bytes: u64 = @divExact(ptr_bits, 8);
                                 const got_addr = p9.bases.data;
-                                const got_index = func_payload.data.owner_decl.link.plan9.got_index.?;
+                                const atom = func_payload.data.owner_decl.link.cast(link.File.Plan9.Atom).?;
+                                const got_index = atom.got_index.?;
                                 const fn_got_addr = got_addr + got_index * ptr_bytes;
 
                                 try self.genSetReg(inst.base.src, Type.initTag(.usize), .x30, .{ .memory = fn_got_addr });
@@ -4342,25 +4349,25 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
                     else => {
                         if (typed_value.val.castTag(.decl_ref)) |payload| {
                             if (self.bin_file.cast(link.File.Elf)) |elf_file| {
-                                const decl = payload.data;
+                                const atom = payload.data.link.cast(link.File.Elf.Atom).?;
                                 const got = &elf_file.program_headers.items[elf_file.phdr_got_index.?];
-                                const got_addr = got.p_vaddr + decl.link.elf.offset_table_index * ptr_bytes;
+                                const got_addr = got.p_vaddr + atom.offset_table_index * ptr_bytes;
                                 return MCValue{ .memory = got_addr };
                             } else if (self.bin_file.cast(link.File.MachO)) |macho_file| {
-                                const decl = payload.data;
+                                const atom = payload.data.link.cast(link.File.MachO.Atom).?;
                                 const got_addr = blk: {
                                     const seg = macho_file.load_commands.items[macho_file.data_const_segment_cmd_index.?].Segment;
                                     const got = seg.sections.items[macho_file.got_section_index.?];
-                                    break :blk got.addr + decl.link.macho.offset_table_index * ptr_bytes;
+                                    break :blk got.addr + atom.offset_table_index * ptr_bytes;
                                 };
                                 return MCValue{ .memory = got_addr };
                             } else if (self.bin_file.cast(link.File.Coff)) |coff_file| {
-                                const decl = payload.data;
-                                const got_addr = coff_file.offset_table_virtual_address + decl.link.coff.offset_table_index * ptr_bytes;
+                                const atom = payload.data.link.cast(link.File.Coff.Atom).?;
+                                const got_addr = coff_file.offset_table_virtual_address + atom.offset_table_index * ptr_bytes;
                                 return MCValue{ .memory = got_addr };
                             } else if (self.bin_file.cast(link.File.Plan9)) |p9| {
-                                const decl = payload.data;
-                                const got_addr = p9.bases.data + decl.link.plan9.got_index.? * ptr_bytes;
+                                const atom = payload.data.link.cast(link.File.Plan9.Atom).?;
+                                const got_addr = p9.bases.data + atom.got_index.? * ptr_bytes;
                                 return MCValue{ .memory = got_addr };
                             } else {
                                 return self.fail(src, "TODO codegen non-ELF const Decl pointer", .{});

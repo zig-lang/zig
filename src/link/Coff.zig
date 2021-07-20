@@ -19,7 +19,7 @@ const mingw = @import("../mingw.zig");
 const llvm_backend = @import("../codegen/llvm.zig");
 
 const allocation_padding = 4 / 3;
-const minimum_text_block_size = 64 * allocation_padding;
+const minimum_atom_size = 64 * allocation_padding;
 
 const section_alignment = 4096;
 const file_alignment = 512;
@@ -40,8 +40,8 @@ base: link.File,
 ptr_width: PtrWidth,
 error_flags: link.File.ErrorFlags = .{},
 
-text_block_free_list: std.ArrayListUnmanaged(*TextBlock) = .{},
-last_text_block: ?*TextBlock = null,
+atom_free_list: std.ArrayListUnmanaged(*Atom) = .{},
+last_atom: ?*Atom = null,
 
 /// Section table file pointer.
 section_table_offset: u32 = 0,
@@ -75,19 +75,23 @@ size_of_image_dirty: bool = false,
 
 pub const PtrWidth = enum { p32, p64 };
 
-pub const TextBlock = struct {
+pub const Atom = struct {
+    base: link.File.Atom = .{ .tag = .coff },
+
     /// Offset of the code relative to the start of the text section
     text_offset: u32,
-    /// Used size of the text block
+    /// Used size of the atom
     size: u32,
     /// This field is undefined for symbols with size = 0.
     offset_table_index: u32,
     /// Points to the previous and next neighbors, based on the `text_offset`.
-    /// This can be used to find, for example, the capacity of this `TextBlock`.
-    prev: ?*TextBlock,
-    next: ?*TextBlock,
+    /// This can be used to find, for example, the capacity of this `Atom`.
+    prev: ?*Atom,
+    next: ?*Atom,
 
-    pub const empty = TextBlock{
+    pub const base_atom_tag: File.Tag = .coff;
+
+    pub const empty = Atom{
         .text_offset = 0,
         .size = 0,
         .offset_table_index = undefined,
@@ -96,26 +100,26 @@ pub const TextBlock = struct {
     };
 
     /// Returns how much room there is to grow in virtual address space.
-    fn capacity(self: TextBlock) u64 {
+    fn capacity(self: Atom) u64 {
         if (self.next) |next| {
             return next.text_offset - self.text_offset;
         }
-        // This is the last block, the capacity is only limited by the address space.
+        // This is the last atom, the capacity is only limited by the address space.
         return std.math.maxInt(u32) - self.text_offset;
     }
 
-    fn freeListEligible(self: TextBlock) bool {
-        // No need to keep a free list node for the last block.
+    fn freeListEligible(self: Atom) bool {
+        // No need to keep a free list node for the last atom.
         const next = self.next orelse return false;
         const cap = next.text_offset - self.text_offset;
         const ideal_cap = self.size * allocation_padding;
         if (cap <= ideal_cap) return false;
         const surplus = cap - ideal_cap;
-        return surplus >= minimum_text_block_size;
+        return surplus >= minimum_atom_size;
     }
 
-    /// Absolute virtual address of the text block when the file is loaded in memory.
-    fn getVAddr(self: TextBlock, coff: Coff) u32 {
+    /// Absolute virtual address of the atom when the file is loaded in memory.
+    fn getVAddr(self: Atom, coff: Coff) u32 {
         return coff.text_section_virtual_address + self.text_offset;
     }
 };
@@ -432,53 +436,53 @@ pub fn allocateDeclIndexes(self: *Coff, decl: *Module.Decl) !void {
     self.offset_table.items[decl.link.coff.offset_table_index] = 0;
 }
 
-fn allocateTextBlock(self: *Coff, text_block: *TextBlock, new_block_size: u64, alignment: u64) !u64 {
-    const new_block_min_capacity = new_block_size * allocation_padding;
+fn allocateAtom(self: *Coff, atom: *Atom, new_atom_size: u64, alignment: u64) !u64 {
+    const new_atom_min_capacity = new_atom_size * allocation_padding;
 
-    // We use these to indicate our intention to update metadata, placing the new block,
+    // We use these to indicate our intention to update metadata, placing the new atom,
     // and possibly removing a free list node.
     // It would be simpler to do it inside the for loop below, but that would cause a
     // problem if an error was returned later in the function. So this action
     // is actually carried out at the end of the function, when errors are no longer possible.
-    var block_placement: ?*TextBlock = null;
+    var atom_placement: ?*Atom = null;
     var free_list_removal: ?usize = null;
 
     const vaddr = blk: {
         var i: usize = 0;
-        while (i < self.text_block_free_list.items.len) {
-            const free_block = self.text_block_free_list.items[i];
+        while (i < self.atom_free_list.items.len) {
+            const free_atom = self.atom_free_list.items[i];
 
-            const next_block_text_offset = free_block.text_offset + free_block.capacity();
-            const new_block_text_offset = mem.alignForwardGeneric(u64, free_block.getVAddr(self.*) + free_block.size, alignment) - self.text_section_virtual_address;
-            if (new_block_text_offset < next_block_text_offset and next_block_text_offset - new_block_text_offset >= new_block_min_capacity) {
-                block_placement = free_block;
+            const next_atom_text_offset = free_atom.text_offset + free_atom.capacity();
+            const new_atom_text_offset = mem.alignForwardGeneric(u64, free_atom.getVAddr(self.*) + free_atom.size, alignment) - self.text_section_virtual_address;
+            if (new_atom_text_offset < next_atom_text_offset and next_atom_text_offset - new_atom_text_offset >= new_atom_min_capacity) {
+                atom_placement = free_atom;
 
-                const remaining_capacity = next_block_text_offset - new_block_text_offset - new_block_min_capacity;
-                if (remaining_capacity < minimum_text_block_size) {
+                const remaining_capacity = next_atom_text_offset - new_atom_text_offset - new_atom_min_capacity;
+                if (remaining_capacity < minimum_atom_size) {
                     free_list_removal = i;
                 }
 
-                break :blk new_block_text_offset + self.text_section_virtual_address;
+                break :blk new_atom_text_offset + self.text_section_virtual_address;
             } else {
-                if (!free_block.freeListEligible()) {
-                    _ = self.text_block_free_list.swapRemove(i);
+                if (!free_atom.freeListEligible()) {
+                    _ = self.atom_free_list.swapRemove(i);
                 } else {
                     i += 1;
                 }
                 continue;
             }
-        } else if (self.last_text_block) |last| {
-            const new_block_vaddr = mem.alignForwardGeneric(u64, last.getVAddr(self.*) + last.size, alignment);
-            block_placement = last;
-            break :blk new_block_vaddr;
+        } else if (self.last_atom) |last| {
+            const new_atom_vaddr = mem.alignForwardGeneric(u64, last.getVAddr(self.*) + last.size, alignment);
+            atom_placement = last;
+            break :blk new_atom_vaddr;
         } else {
             break :blk self.text_section_virtual_address;
         }
     };
 
-    const expand_text_section = block_placement == null or block_placement.?.next == null;
+    const expand_text_section = atom_placement == null or atom_placement.?.next == null;
     if (expand_text_section) {
-        const needed_size = @intCast(u32, mem.alignForwardGeneric(u64, vaddr + new_block_size - self.text_section_virtual_address, file_alignment));
+        const needed_size = @intCast(u32, mem.alignForwardGeneric(u64, vaddr + new_atom_size - self.text_section_virtual_address, file_alignment));
         if (needed_size > self.text_section_size) {
             const current_text_section_virtual_size = mem.alignForwardGeneric(u32, self.text_section_size, section_alignment);
             const new_text_section_virtual_size = mem.alignForwardGeneric(u32, needed_size, section_alignment);
@@ -493,81 +497,81 @@ fn allocateTextBlock(self: *Coff, text_block: *TextBlock, new_block_size: u64, a
             self.text_section_size = needed_size;
             self.text_section_size_dirty = true;
         }
-        self.last_text_block = text_block;
+        self.last_atom = atom;
     }
-    text_block.text_offset = @intCast(u32, vaddr - self.text_section_virtual_address);
-    text_block.size = @intCast(u32, new_block_size);
+    atom.text_offset = @intCast(u32, vaddr - self.text_section_virtual_address);
+    atom.size = @intCast(u32, new_atom_size);
 
-    // This function can also reallocate a text block.
+    // This function can also reallocate an atom.
     // In this case we need to "unplug" it from its previous location before
     // plugging it in to its new location.
-    if (text_block.prev) |prev| {
-        prev.next = text_block.next;
+    if (atom.prev) |prev| {
+        prev.next = atom.next;
     }
-    if (text_block.next) |next| {
-        next.prev = text_block.prev;
+    if (atom.next) |next| {
+        next.prev = atom.prev;
     }
 
-    if (block_placement) |big_block| {
-        text_block.prev = big_block;
-        text_block.next = big_block.next;
-        big_block.next = text_block;
+    if (atom_placement) |big_atom| {
+        atom.prev = big_atom;
+        atom.next = big_atom.next;
+        big_atom.next = atom;
     } else {
-        text_block.prev = null;
-        text_block.next = null;
+        atom.prev = null;
+        atom.next = null;
     }
     if (free_list_removal) |i| {
-        _ = self.text_block_free_list.swapRemove(i);
+        _ = self.atom_free_list.swapRemove(i);
     }
     return vaddr;
 }
 
-fn growTextBlock(self: *Coff, text_block: *TextBlock, new_block_size: u64, alignment: u64) !u64 {
-    const block_vaddr = text_block.getVAddr(self.*);
-    const align_ok = mem.alignBackwardGeneric(u64, block_vaddr, alignment) == block_vaddr;
-    const need_realloc = !align_ok or new_block_size > text_block.capacity();
-    if (!need_realloc) return @as(u64, block_vaddr);
-    return self.allocateTextBlock(text_block, new_block_size, alignment);
+fn growAtom(self: *Coff, atom: *Atom, new_atom_size: u64, alignment: u64) !u64 {
+    const atom_vaddr = atom.getVAddr(self.*);
+    const align_ok = mem.alignBackwardGeneric(u64, atom_vaddr, alignment) == atom_vaddr;
+    const need_realloc = !align_ok or new_atom_size > atom.capacity();
+    if (!need_realloc) return @as(u64, atom_vaddr);
+    return self.allocateAtom(atom, new_atom_size, alignment);
 }
 
-fn shrinkTextBlock(self: *Coff, text_block: *TextBlock, new_block_size: u64) void {
-    text_block.size = @intCast(u32, new_block_size);
-    if (text_block.capacity() - text_block.size >= minimum_text_block_size) {
-        self.text_block_free_list.append(self.base.allocator, text_block) catch {};
+fn shrinkAtom(self: *Coff, atom: *Atom, new_atom_size: u64) void {
+    atom.size = @intCast(u32, new_atom_size);
+    if (atom.capacity() - atom.size >= minimum_atom_size) {
+        self.atom_free_list.append(self.base.allocator, atom) catch {};
     }
 }
 
-fn freeTextBlock(self: *Coff, text_block: *TextBlock) void {
+fn freeAtom(self: *Coff, atom: *Atom) void {
     var already_have_free_list_node = false;
     {
         var i: usize = 0;
-        // TODO turn text_block_free_list into a hash map
-        while (i < self.text_block_free_list.items.len) {
-            if (self.text_block_free_list.items[i] == text_block) {
-                _ = self.text_block_free_list.swapRemove(i);
+        // TODO turn atom_free_list into a hash map
+        while (i < self.atom_free_list.items.len) {
+            if (self.atom_free_list.items[i] == atom) {
+                _ = self.atom_free_list.swapRemove(i);
                 continue;
             }
-            if (self.text_block_free_list.items[i] == text_block.prev) {
+            if (self.atom_free_list.items[i] == atom.prev) {
                 already_have_free_list_node = true;
             }
             i += 1;
         }
     }
-    if (self.last_text_block == text_block) {
-        self.last_text_block = text_block.prev;
+    if (self.last_atom == atom) {
+        self.last_atom = atom.prev;
     }
-    if (text_block.prev) |prev| {
-        prev.next = text_block.next;
+    if (atom.prev) |prev| {
+        prev.next = atom.next;
 
         if (!already_have_free_list_node and prev.freeListEligible()) {
             // The free list is heuristics, it doesn't have to be perfect, so we can
             // ignore the OOM here.
-            self.text_block_free_list.append(self.base.allocator, prev) catch {};
+            self.atom_free_list.append(self.base.allocator, prev) catch {};
         }
     }
 
-    if (text_block.next) |next| {
-        next.prev = text_block.prev;
+    if (atom.next) |next| {
+        next.prev = atom.prev;
     }
 }
 
@@ -691,7 +695,7 @@ pub fn updateDecl(self: *Coff, module: *Module, decl: *Module.Decl) !void {
             !mem.isAlignedGeneric(u32, decl.link.coff.text_offset, required_alignment);
         if (need_realloc) {
             const curr_vaddr = self.getDeclVAddr(decl);
-            const vaddr = try self.growTextBlock(&decl.link.coff, code.len, required_alignment);
+            const vaddr = try self.growAtom(&decl.link.coff, code.len, required_alignment);
             log.debug("growing {s} from 0x{x} to 0x{x}\n", .{ decl.name, curr_vaddr, vaddr });
             if (vaddr != curr_vaddr) {
                 log.debug("  (writing new offset table entry)\n", .{});
@@ -699,16 +703,16 @@ pub fn updateDecl(self: *Coff, module: *Module, decl: *Module.Decl) !void {
                 try self.writeOffsetTableEntry(decl.link.coff.offset_table_index);
             }
         } else if (code.len < curr_size) {
-            self.shrinkTextBlock(&decl.link.coff, code.len);
+            self.shrinkAtom(&decl.link.coff, code.len);
         }
     } else {
-        const vaddr = try self.allocateTextBlock(&decl.link.coff, code.len, required_alignment);
-        log.debug("allocated text block for {s} at 0x{x} (size: {Bi})\n", .{
+        const vaddr = try self.allocateAtom(&decl.link.coff, code.len, required_alignment);
+        log.debug("allocated atom for {s} at 0x{x} (size: {Bi})\n", .{
             mem.spanZ(decl.name),
             vaddr,
             std.fmt.fmtIntSizeDec(code.len),
         });
-        errdefer self.freeTextBlock(&decl.link.coff);
+        errdefer self.freeAtom(&decl.link.coff);
         self.offset_table.items[decl.link.coff.offset_table_index] = vaddr;
         try self.writeOffsetTableEntry(decl.link.coff.offset_table_index);
     }
@@ -725,7 +729,7 @@ pub fn freeDecl(self: *Coff, decl: *Module.Decl) void {
     if (self.llvm_object) |_| return;
 
     // Appending to free lists is allowed to fail because the free lists are heuristics based anyway.
-    self.freeTextBlock(&decl.link.coff);
+    self.freeAtom(&decl.link.coff);
     self.offset_table_free_list.append(self.base.allocator, decl.link.coff.offset_table_index) catch {};
 }
 
@@ -1346,11 +1350,23 @@ pub fn updateDeclLineNumber(self: *Coff, module: *Module, decl: *Module.Decl) !v
     // TODO Implement this
 }
 
+pub fn createAtom(self: *Coff) !*File.Atom {
+    const atom = try self.base.allocator.create(Atom);
+    atom.* = Atom.empty;
+    try self.atoms.append(self.base.allocator, atom);
+    return &atom.base;
+}
+
 pub fn deinit(self: *Coff) void {
     if (build_options.have_llvm)
         if (self.llvm_object) |ir_module| ir_module.deinit(self.base.allocator);
 
-    self.text_block_free_list.deinit(self.base.allocator);
     self.offset_table.deinit(self.base.allocator);
     self.offset_table_free_list.deinit(self.base.allocator);
+
+    for (self.atoms.items) |atom| {
+        self.base.allocator.destroy(atom);
+    }
+    self.atoms.deinit(self.base.allocator);
+    self.atom_free_list.deinit(self.base.allocator);
 }

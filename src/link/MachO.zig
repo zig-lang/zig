@@ -138,12 +138,13 @@ string_table_dirty: bool = false,
 
 string_table_needs_relocation: bool = false,
 
-/// A list of text blocks that have surplus capacity. This list can have false
+atoms: std.ArrayListUnmanaged(*Atom) = .{},
+/// A list of atoms that have surplus capacity. This list can have false
 /// positives, as functions grow and shrink over time, only sometimes being added
 /// or removed from the freelist.
 ///
-/// A text block has surplus capacity when its overcapacity value is greater than
-/// padToIdeal(minimum_text_block_size). That is, when it has so
+/// An atom has surplus capacity when its overcapacity value is greater than
+/// padToIdeal(minimum_atom_size). That is, when it has so
 /// much extra capacity, that we could fit a small new symbol in it, itself with
 /// ideal_capacity or more.
 ///
@@ -151,12 +152,12 @@ string_table_needs_relocation: bool = false,
 ///
 /// Overcapacity is measured by actual_capacity - ideal_capacity. Note that
 /// overcapacity can be negative. A simple way to have negative overcapacity is to
-/// allocate a fresh text block, which will have ideal capacity, and then grow it
+/// allocate a fresh atom, which will have ideal capacity, and then grow it
 /// by 1 byte. It will then have -1 overcapacity.
-text_block_free_list: std.ArrayListUnmanaged(*TextBlock) = .{},
+atom_free_list: std.ArrayListUnmanaged(*Atom) = .{},
 
-/// Pointer to the last allocated text block
-last_text_block: ?*TextBlock = null,
+/// Pointer to the last allocated atom
+last_atom: ?*Atom = null,
 
 /// A list of all PIE fixups required for this run of the linker.
 /// Warning, this is currently NOT thread-safe. See the TODO below.
@@ -246,10 +247,12 @@ const LIB_SYSTEM_PATH: [*:0]const u8 = DEFAULT_LIB_SEARCH_PATH ++ "/libSystem.B.
 /// In order for a slice of bytes to be considered eligible to keep metadata pointing at
 /// it as a possible place to put new symbols, it must have enough room for this many bytes
 /// (plus extra for reserved capacity).
-const minimum_text_block_size = 64;
-const min_text_capacity = padToIdeal(minimum_text_block_size);
+const minimum_atom_size = 64;
+const min_text_capacity = padToIdeal(minimum_atom_size);
 
-pub const TextBlock = struct {
+pub const Atom = struct {
+    base: File.Atom = .{ .tag = .macho },
+
     /// Each decl always gets a local symbol with the fully qualified name.
     /// The vaddr and size are found here directly.
     /// The file offset is found by computing the vaddr offset from the section vaddr
@@ -260,24 +263,26 @@ pub const TextBlock = struct {
     /// Index into offset table
     /// This field is undefined for symbols with size = 0.
     offset_table_index: u32,
-    /// Size of this text block
+    /// Size of this atom
     /// Unlike in Elf, we need to store the size of this symbol as part of
-    /// the TextBlock since macho.nlist_64 lacks this information.
+    /// the Atom since macho.nlist_64 lacks this information.
     size: u64,
     /// Points to the previous and next neighbours
-    prev: ?*TextBlock,
-    next: ?*TextBlock,
+    prev: ?*Atom,
+    next: ?*Atom,
 
     /// Previous/next linked list pointers.
     /// This is the linked list node for this Decl's corresponding .debug_info tag.
-    dbg_info_prev: ?*TextBlock,
-    dbg_info_next: ?*TextBlock,
+    dbg_info_prev: ?*Atom,
+    dbg_info_next: ?*Atom,
     /// Offset into .debug_info pointing to the tag for this Decl.
     dbg_info_off: u32,
     /// Size of the .debug_info tag for this Decl, not including padding.
     dbg_info_len: u32,
 
-    pub const empty = TextBlock{
+    pub const base_atom_tag: File.Tag = .macho;
+
+    pub const empty = Atom{
         .local_sym_index = 0,
         .offset_table_index = undefined,
         .size = 0,
@@ -292,20 +297,20 @@ pub const TextBlock = struct {
     /// Returns how much room there is to grow in virtual address space.
     /// File offset relocation happens transparently, so it is not included in
     /// this calculation.
-    fn capacity(self: TextBlock, macho_file: MachO) u64 {
+    fn capacity(self: Atom, macho_file: MachO) u64 {
         const self_sym = macho_file.locals.items[self.local_sym_index];
         if (self.next) |next| {
             const next_sym = macho_file.locals.items[next.local_sym_index];
             return next_sym.n_value - self_sym.n_value;
         } else {
-            // We are the last block.
+            // We are the last atom.
             // The capacity is limited only by virtual address space.
             return std.math.maxInt(u64) - self_sym.n_value;
         }
     }
 
-    fn freeListEligible(self: TextBlock, macho_file: MachO) bool {
-        // No need to keep a free list node for the last block.
+    fn freeListEligible(self: Atom, macho_file: MachO) bool {
+        // No need to keep a free list node for the last atom.
         const next = self.next orelse return false;
         const self_sym = macho_file.locals.items[self.local_sym_index];
         const next_sym = macho_file.locals.items[next.local_sym_index];
@@ -512,6 +517,13 @@ pub fn flushModule(self: *MachO, comp: *Compilation) !void {
             else => {},
         }
     }
+}
+
+pub fn createAtom(self: *MachO) !*File.Atom {
+    const atom = try self.base.allocator.create(Atom);
+    atom.* = Atom.empty;
+    try self.atoms.append(self.base.allocator, atom);
+    return &atom.base;
 }
 
 fn resolveSearchDir(
@@ -990,7 +1002,6 @@ pub fn deinit(self: *MachO) void {
     self.nonlazy_imports.deinit(self.base.allocator);
     self.pie_fixups.deinit(self.base.allocator);
     self.stub_fixups.deinit(self.base.allocator);
-    self.text_block_free_list.deinit(self.base.allocator);
     self.offset_table.deinit(self.base.allocator);
     self.offset_table_free_list.deinit(self.base.allocator);
     {
@@ -1009,19 +1020,25 @@ pub fn deinit(self: *MachO) void {
         lc.deinit(self.base.allocator);
     }
     self.load_commands.deinit(self.base.allocator);
+
+    for (self.atoms.items) |atom| {
+        self.base.allocator.destroy(atom);
+    }
+    self.atoms.deinit(self.base.allocator);
+    self.atom_free_list.deinit(self.base.allocator);
 }
 
-fn freeTextBlock(self: *MachO, text_block: *TextBlock) void {
+fn freeAtom(self: *MachO, atom: *Atom) void {
     var already_have_free_list_node = false;
     {
         var i: usize = 0;
-        // TODO turn text_block_free_list into a hash map
-        while (i < self.text_block_free_list.items.len) {
-            if (self.text_block_free_list.items[i] == text_block) {
-                _ = self.text_block_free_list.swapRemove(i);
+        // TODO turn atom_free_list into a hash map
+        while (i < self.atom_free_list.items.len) {
+            if (self.atom_free_list.items[i] == atom) {
+                _ = self.atom_free_list.swapRemove(i);
                 continue;
             }
-            if (self.text_block_free_list.items[i] == text_block.prev) {
+            if (self.atom_free_list.items[i] == atom.prev) {
                 already_have_free_list_node = true;
             }
             i += 1;
@@ -1029,106 +1046,107 @@ fn freeTextBlock(self: *MachO, text_block: *TextBlock) void {
     }
     // TODO process free list for dbg info just like we do above for vaddrs
 
-    if (self.last_text_block == text_block) {
+    if (self.last_atom == atom) {
         // TODO shrink the __text section size here
-        self.last_text_block = text_block.prev;
+        self.last_atom = atom.prev;
     }
     if (self.d_sym) |*ds| {
-        if (ds.dbg_info_decl_first == text_block) {
-            ds.dbg_info_decl_first = text_block.dbg_info_next;
+        if (ds.dbg_info_decl_first == atom) {
+            ds.dbg_info_decl_first = atom.dbg_info_next;
         }
-        if (ds.dbg_info_decl_last == text_block) {
+        if (ds.dbg_info_decl_last == atom) {
             // TODO shrink the .debug_info section size here
-            ds.dbg_info_decl_last = text_block.dbg_info_prev;
+            ds.dbg_info_decl_last = atom.dbg_info_prev;
         }
     }
 
-    if (text_block.prev) |prev| {
-        prev.next = text_block.next;
+    if (atom.prev) |prev| {
+        prev.next = atom.next;
 
         if (!already_have_free_list_node and prev.freeListEligible(self.*)) {
             // The free list is heuristics, it doesn't have to be perfect, so we can ignore
             // the OOM here.
-            self.text_block_free_list.append(self.base.allocator, prev) catch {};
+            self.atom_free_list.append(self.base.allocator, prev) catch {};
         }
     } else {
-        text_block.prev = null;
+        atom.prev = null;
     }
 
-    if (text_block.next) |next| {
-        next.prev = text_block.prev;
+    if (atom.next) |next| {
+        next.prev = atom.prev;
     } else {
-        text_block.next = null;
+        atom.next = null;
     }
 
-    if (text_block.dbg_info_prev) |prev| {
-        prev.dbg_info_next = text_block.dbg_info_next;
+    if (atom.dbg_info_prev) |prev| {
+        prev.dbg_info_next = atom.dbg_info_next;
 
-        // TODO the free list logic like we do for text blocks above
+        // TODO the free list logic like we do for atoms above
     } else {
-        text_block.dbg_info_prev = null;
+        atom.dbg_info_prev = null;
     }
 
-    if (text_block.dbg_info_next) |next| {
-        next.dbg_info_prev = text_block.dbg_info_prev;
+    if (atom.dbg_info_next) |next| {
+        next.dbg_info_prev = atom.dbg_info_prev;
     } else {
-        text_block.dbg_info_next = null;
+        atom.dbg_info_next = null;
     }
 }
 
-fn shrinkTextBlock(self: *MachO, text_block: *TextBlock, new_block_size: u64) void {
+fn shrinkAtom(self: *MachO, atom: *Atom, new_atom_size: u64) void {
     _ = self;
-    _ = text_block;
-    _ = new_block_size;
+    _ = atom;
+    _ = new_atom_size;
     // TODO check the new capacity, and if it crosses the size threshold into a big enough
     // capacity, insert a free list node for it.
 }
 
-fn growTextBlock(self: *MachO, text_block: *TextBlock, new_block_size: u64, alignment: u64) !u64 {
-    const sym = self.locals.items[text_block.local_sym_index];
+fn growAtom(self: *MachO, atom: *Atom, new_atom_size: u64, alignment: u64) !u64 {
+    const sym = self.locals.items[atom.local_sym_index];
     const align_ok = mem.alignBackwardGeneric(u64, sym.n_value, alignment) == sym.n_value;
-    const need_realloc = !align_ok or new_block_size > text_block.capacity(self.*);
+    const need_realloc = !align_ok or new_atom_size > atom.capacity(self.*);
     if (!need_realloc) return sym.n_value;
-    return self.allocateTextBlock(text_block, new_block_size, alignment);
+    return self.allocateAtom(atom, new_atom_size, alignment);
 }
 
 pub fn allocateDeclIndexes(self: *MachO, decl: *Module.Decl) !void {
-    if (decl.link.macho.local_sym_index != 0) return;
+    const atom = decl.link.cast(MachO.Atom) orelse unreachable;
+    if (atom.local_sym_index != 0) return;
 
     try self.locals.ensureCapacity(self.base.allocator, self.locals.items.len + 1);
     try self.offset_table.ensureCapacity(self.base.allocator, self.offset_table.items.len + 1);
 
     if (self.locals_free_list.popOrNull()) |i| {
         log.debug("reusing symbol index {d} for {s}", .{ i, decl.name });
-        decl.link.macho.local_sym_index = i;
+        atom.local_sym_index = i;
     } else {
         log.debug("allocating symbol index {d} for {s}", .{ self.locals.items.len, decl.name });
-        decl.link.macho.local_sym_index = @intCast(u32, self.locals.items.len);
+        atom.local_sym_index = @intCast(u32, self.locals.items.len);
         _ = self.locals.addOneAssumeCapacity();
     }
 
     if (self.offset_table_free_list.popOrNull()) |i| {
         log.debug("reusing offset table entry index {d} for {s}", .{ i, decl.name });
-        decl.link.macho.offset_table_index = i;
+        atom.offset_table_index = i;
     } else {
         log.debug("allocating offset table entry index {d} for {s}", .{ self.offset_table.items.len, decl.name });
-        decl.link.macho.offset_table_index = @intCast(u32, self.offset_table.items.len);
+        atom.offset_table_index = @intCast(u32, self.offset_table.items.len);
         _ = self.offset_table.addOneAssumeCapacity();
         self.offset_table_count_dirty = true;
         self.rebase_info_dirty = true;
     }
 
-    self.locals.items[decl.link.macho.local_sym_index] = .{
+    self.locals.items[atom.local_sym_index] = .{
         .n_strx = 0,
         .n_type = 0,
         .n_sect = 0,
         .n_desc = 0,
         .n_value = 0,
     };
-    self.offset_table.items[decl.link.macho.offset_table_index] = .{
+    self.offset_table.items[atom.offset_table_index] = .{
         .kind = .Local,
-        .symbol = decl.link.macho.local_sym_index,
-        .index = decl.link.macho.offset_table_index,
+        .symbol = atom.local_sym_index,
+        .index = atom.offset_table_index,
     };
 }
 
@@ -1188,32 +1206,33 @@ pub fn updateDecl(self: *MachO, module: *Module, decl: *Module.Decl) !void {
     };
 
     const required_alignment = decl.ty.abiAlignment(self.base.options.target);
-    assert(decl.link.macho.local_sym_index != 0); // Caller forgot to call allocateDeclIndexes()
-    const symbol = &self.locals.items[decl.link.macho.local_sym_index];
+    const atom = decl.link.cast(MachO.Atom) orelse unreachable;
+    assert(atom.local_sym_index != 0); // Caller forgot to call allocateDeclIndexes()
+    const symbol = &self.locals.items[atom.local_sym_index];
 
-    if (decl.link.macho.size != 0) {
-        const capacity = decl.link.macho.capacity(self.*);
+    if (atom.size != 0) {
+        const capacity = atom.capacity(self.*);
         const need_realloc = code.len > capacity or !mem.isAlignedGeneric(u64, symbol.n_value, required_alignment);
         if (need_realloc) {
-            const vaddr = try self.growTextBlock(&decl.link.macho, code.len, required_alignment);
+            const vaddr = try self.growAtom(atom, code.len, required_alignment);
 
             log.debug("growing {s} and moving from 0x{x} to 0x{x}", .{ decl.name, symbol.n_value, vaddr });
 
             if (vaddr != symbol.n_value) {
                 log.debug(" (writing new offset table entry)", .{});
-                self.offset_table.items[decl.link.macho.offset_table_index] = .{
+                self.offset_table.items[atom.offset_table_index] = .{
                     .kind = .Local,
-                    .symbol = decl.link.macho.local_sym_index,
-                    .index = decl.link.macho.offset_table_index,
+                    .symbol = atom.local_sym_index,
+                    .index = atom.offset_table_index,
                 };
-                try self.writeOffsetTableEntry(decl.link.macho.offset_table_index);
+                try self.writeOffsetTableEntry(atom.offset_table_index);
             }
 
             symbol.n_value = vaddr;
-        } else if (code.len < decl.link.macho.size) {
-            self.shrinkTextBlock(&decl.link.macho, code.len);
+        } else if (code.len < atom.size) {
+            self.shrinkAtom(atom, code.len);
         }
-        decl.link.macho.size = code.len;
+        atom.size = code.len;
 
         const new_name = try std.fmt.allocPrint(self.base.allocator, "_{s}", .{mem.spanZ(decl.name)});
         defer self.base.allocator.free(new_name);
@@ -1223,19 +1242,19 @@ pub fn updateDecl(self: *MachO, module: *Module, decl: *Module.Decl) !void {
         symbol.n_sect = @intCast(u8, self.text_section_index.?) + 1;
         symbol.n_desc = 0;
 
-        try self.writeLocalSymbol(decl.link.macho.local_sym_index);
+        try self.writeLocalSymbol(atom.local_sym_index);
         if (self.d_sym) |*ds|
-            try ds.writeLocalSymbol(decl.link.macho.local_sym_index);
+            try ds.writeLocalSymbol(atom.local_sym_index);
     } else {
         const decl_name = try std.fmt.allocPrint(self.base.allocator, "_{s}", .{mem.spanZ(decl.name)});
         defer self.base.allocator.free(decl_name);
 
         const name_str_index = try self.makeString(decl_name);
-        const addr = try self.allocateTextBlock(&decl.link.macho, code.len, required_alignment);
+        const addr = try self.allocateAtom(atom, code.len, required_alignment);
 
-        log.debug("allocated text block for {s} at 0x{x}", .{ decl_name, addr });
+        log.debug("allocated atom for {s} at 0x{x}", .{ decl_name, addr });
 
-        errdefer self.freeTextBlock(&decl.link.macho);
+        errdefer self.freeAtom(atom);
 
         symbol.* = .{
             .n_strx = name_str_index,
@@ -1244,16 +1263,16 @@ pub fn updateDecl(self: *MachO, module: *Module, decl: *Module.Decl) !void {
             .n_desc = 0,
             .n_value = addr,
         };
-        self.offset_table.items[decl.link.macho.offset_table_index] = .{
+        self.offset_table.items[atom.offset_table_index] = .{
             .kind = .Local,
-            .symbol = decl.link.macho.local_sym_index,
-            .index = decl.link.macho.offset_table_index,
+            .symbol = atom.local_sym_index,
+            .index = atom.offset_table_index,
         };
 
-        try self.writeLocalSymbol(decl.link.macho.local_sym_index);
+        try self.writeLocalSymbol(atom.local_sym_index);
         if (self.d_sym) |*ds|
-            try ds.writeLocalSymbol(decl.link.macho.local_sym_index);
-        try self.writeOffsetTableEntry(decl.link.macho.offset_table_index);
+            try ds.writeLocalSymbol(atom.local_sym_index);
+        try self.writeOffsetTableEntry(atom.offset_table_index);
     }
 
     // Calculate displacements to target addr (if any).
@@ -1364,8 +1383,9 @@ pub fn updateDeclExports(
     defer tracy.end();
 
     try self.globals.ensureCapacity(self.base.allocator, self.globals.items.len + exports.len);
-    if (decl.link.macho.local_sym_index == 0) return;
-    const decl_sym = &self.locals.items[decl.link.macho.local_sym_index];
+    const atom = decl.link.cast(MachO.Atom) orelse unreachable;
+    if (atom.local_sym_index == 0) return;
+    const decl_sym = &self.locals.items[atom.local_sym_index];
 
     for (exports) |exp| {
         const exp_name = try std.fmt.allocPrint(self.base.allocator, "_{s}", .{exp.options.name});
@@ -1454,17 +1474,17 @@ pub fn deleteExport(self: *MachO, exp: Export) void {
 
 pub fn freeDecl(self: *MachO, decl: *Module.Decl) void {
     // Appending to free lists is allowed to fail because the free lists are heuristics based anyway.
-    self.freeTextBlock(&decl.link.macho);
-    if (decl.link.macho.local_sym_index != 0) {
-        self.locals_free_list.append(self.base.allocator, decl.link.macho.local_sym_index) catch {};
-        self.offset_table_free_list.append(self.base.allocator, decl.link.macho.offset_table_index) catch {};
+    self.freeAtom(atom);
+    if (atom.local_sym_index != 0) {
+        self.locals_free_list.append(self.base.allocator, atom.local_sym_index) catch {};
+        self.offset_table_free_list.append(self.base.allocator, atom.offset_table_index) catch {};
 
-        self.locals.items[decl.link.macho.local_sym_index].n_type = 0;
+        self.locals.items[atom.local_sym_index].n_type = 0;
 
-        decl.link.macho.local_sym_index = 0;
+        atom.local_sym_index = 0;
     }
     if (self.d_sym) |*ds| {
-        // TODO make this logic match freeTextBlock. Maybe abstract the logic
+        // TODO make this logic match freeAtom. Maybe abstract the logic
         // out since the same thing is desired for both.
         _ = ds.dbg_line_fn_free_list.remove(&decl.fn_link.macho);
         if (decl.fn_link.macho.prev) |prev| {
@@ -1489,8 +1509,9 @@ pub fn freeDecl(self: *MachO, decl: *Module.Decl) void {
 }
 
 pub fn getDeclVAddr(self: *MachO, decl: *const Module.Decl) u64 {
-    assert(decl.link.macho.local_sym_index != 0);
-    return self.locals.items[decl.link.macho.local_sym_index].n_value;
+    const atom = decl.link.cast(MachO.Atom) orelse unreachable;
+    assert(atom.local_sym_index != 0);
+    return self.locals.items[atom.local_sym_index].n_value;
 }
 
 pub fn populateMissingMetadata(self: *MachO) !void {
@@ -2041,77 +2062,77 @@ pub fn populateMissingMetadata(self: *MachO) !void {
     }
 }
 
-fn allocateTextBlock(self: *MachO, text_block: *TextBlock, new_block_size: u64, alignment: u64) !u64 {
+fn allocateAtom(self: *MachO, atom: *Atom, new_atom_size: u64, alignment: u64) !u64 {
     const text_segment = &self.load_commands.items[self.text_segment_cmd_index.?].Segment;
     const text_section = &text_segment.sections.items[self.text_section_index.?];
-    const new_block_ideal_capacity = padToIdeal(new_block_size);
+    const new_atom_ideal_capacity = padToIdeal(new_atom_size);
 
-    // We use these to indicate our intention to update metadata, placing the new block,
+    // We use these to indicate our intention to update metadata, placing the new atom,
     // and possibly removing a free list node.
     // It would be simpler to do it inside the for loop below, but that would cause a
     // problem if an error was returned later in the function. So this action
     // is actually carried out at the end of the function, when errors are no longer possible.
-    var block_placement: ?*TextBlock = null;
+    var atom_placement: ?*Atom = null;
     var free_list_removal: ?usize = null;
 
     // First we look for an appropriately sized free list node.
     // The list is unordered. We'll just take the first thing that works.
     const vaddr = blk: {
         var i: usize = 0;
-        while (i < self.text_block_free_list.items.len) {
-            const big_block = self.text_block_free_list.items[i];
-            // We now have a pointer to a live text block that has too much capacity.
-            // Is it enough that we could fit this new text block?
-            const sym = self.locals.items[big_block.local_sym_index];
-            const capacity = big_block.capacity(self.*);
+        while (i < self.atom_free_list.items.len) {
+            const big_atom = self.atom_free_list.items[i];
+            // We now have a pointer to a live atom that has too much capacity.
+            // Is it enough that we could fit this new atom?
+            const sym = self.locals.items[big_atom.local_sym_index];
+            const capacity = big_atom.capacity(self.*);
             const ideal_capacity = padToIdeal(capacity);
             const ideal_capacity_end_vaddr = sym.n_value + ideal_capacity;
             const capacity_end_vaddr = sym.n_value + capacity;
-            const new_start_vaddr_unaligned = capacity_end_vaddr - new_block_ideal_capacity;
+            const new_start_vaddr_unaligned = capacity_end_vaddr - new_atom_ideal_capacity;
             const new_start_vaddr = mem.alignBackwardGeneric(u64, new_start_vaddr_unaligned, alignment);
             if (new_start_vaddr < ideal_capacity_end_vaddr) {
                 // Additional bookkeeping here to notice if this free list node
-                // should be deleted because the block that it points to has grown to take up
+                // should be deleted because the atom that it points to has grown to take up
                 // more of the extra capacity.
-                if (!big_block.freeListEligible(self.*)) {
-                    _ = self.text_block_free_list.swapRemove(i);
+                if (!big_atom.freeListEligible(self.*)) {
+                    _ = self.atom_free_list.swapRemove(i);
                 } else {
                     i += 1;
                 }
                 continue;
             }
-            // At this point we know that we will place the new block here. But the
+            // At this point we know that we will place the new atom here. But the
             // remaining question is whether there is still yet enough capacity left
             // over for there to still be a free list node.
             const remaining_capacity = new_start_vaddr - ideal_capacity_end_vaddr;
             const keep_free_list_node = remaining_capacity >= min_text_capacity;
 
             // Set up the metadata to be updated, after errors are no longer possible.
-            block_placement = big_block;
+            atom_placement = big_atom;
             if (!keep_free_list_node) {
                 free_list_removal = i;
             }
             break :blk new_start_vaddr;
-        } else if (self.last_text_block) |last| {
+        } else if (self.last_atom) |last| {
             const last_symbol = self.locals.items[last.local_sym_index];
             // TODO We should pad out the excess capacity with NOPs. For executables,
             // no padding seems to be OK, but it will probably not be for objects.
             const ideal_capacity = padToIdeal(last.size);
             const ideal_capacity_end_vaddr = last_symbol.n_value + ideal_capacity;
             const new_start_vaddr = mem.alignForwardGeneric(u64, ideal_capacity_end_vaddr, alignment);
-            block_placement = last;
+            atom_placement = last;
             break :blk new_start_vaddr;
         } else {
             break :blk text_section.addr;
         }
     };
 
-    const expand_text_section = block_placement == null or block_placement.?.next == null;
+    const expand_text_section = atom_placement == null or atom_placement.?.next == null;
     if (expand_text_section) {
-        const needed_size = (vaddr + new_block_size) - text_section.addr;
+        const needed_size = (vaddr + new_atom_size) - text_section.addr;
         assert(needed_size <= text_segment.inner.filesize); // TODO must move the entire text section.
 
-        self.last_text_block = text_block;
+        self.last_atom = atom;
         text_section.size = needed_size;
         self.load_commands_dirty = true; // TODO Make more granular.
 
@@ -2122,25 +2143,25 @@ fn allocateTextBlock(self: *MachO, text_block: *TextBlock, new_block_size: u64, 
             ds.load_commands_dirty = true;
         }
     }
-    text_block.size = new_block_size;
+    atom.size = new_atom_size;
 
-    if (text_block.prev) |prev| {
-        prev.next = text_block.next;
+    if (atom.prev) |prev| {
+        prev.next = atom.next;
     }
-    if (text_block.next) |next| {
-        next.prev = text_block.prev;
+    if (atom.next) |next| {
+        next.prev = atom.prev;
     }
 
-    if (block_placement) |big_block| {
-        text_block.prev = big_block;
-        text_block.next = big_block.next;
-        big_block.next = text_block;
+    if (atom_placement) |big_atom| {
+        atom.prev = big_atom;
+        atom.next = big_atom.next;
+        big_atom.next = atom;
     } else {
-        text_block.prev = null;
-        text_block.next = null;
+        atom.prev = null;
+        atom.next = null;
     }
     if (free_list_removal) |i| {
-        _ = self.text_block_free_list.swapRemove(i);
+        _ = self.atom_free_list.swapRemove(i);
     }
 
     return vaddr;

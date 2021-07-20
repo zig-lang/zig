@@ -253,7 +253,7 @@ pub const Decl = struct {
 
     /// Represents the position of the code in the output file.
     /// This is populated regardless of semantic analysis and code generation.
-    link: link.File.LinkBlock,
+    link: *link.File.Atom,
 
     /// Represents the function in the linked output file, if the `Decl` is a function.
     /// This is stored here and not in `Fn` because `Decl` survives across updates but
@@ -3510,18 +3510,7 @@ pub fn clearDecl(
     if (decl.has_tv) {
         if (decl.ty.hasCodeGenBits()) {
             mod.comp.bin_file.freeDecl(decl);
-
-            // TODO instead of a union, put this memory trailing Decl objects,
-            // and allow it to be variably sized.
-            decl.link = switch (mod.comp.bin_file.tag) {
-                .coff => .{ .coff = link.File.Coff.TextBlock.empty },
-                .elf => .{ .elf = link.File.Elf.TextBlock.empty },
-                .macho => .{ .macho = link.File.MachO.TextBlock.empty },
-                .plan9 => .{ .plan9 = link.File.Plan9.DeclBlock.empty },
-                .c => .{ .c = link.File.C.DeclBlock.empty },
-                .wasm => .{ .wasm = link.File.Wasm.DeclBlock.empty },
-                .spirv => .{ .spirv = {} },
-            };
+            decl.link = try mod.comp.bin_file.createAtom();
             decl.fn_link = switch (mod.comp.bin_file.tag) {
                 .coff => .{ .coff = {} },
                 .elf => .{ .elf = link.File.Elf.SrcFn.empty },
@@ -3690,15 +3679,7 @@ fn allocateNewDecl(mod: *Module, namespace: *Scope.Namespace, src_node: ast.Node
         .analysis = .unreferenced,
         .deletion_flag = false,
         .zir_decl_index = 0,
-        .link = switch (mod.comp.bin_file.tag) {
-            .coff => .{ .coff = link.File.Coff.TextBlock.empty },
-            .elf => .{ .elf = link.File.Elf.TextBlock.empty },
-            .macho => .{ .macho = link.File.MachO.TextBlock.empty },
-            .plan9 => .{ .plan9 = link.File.Plan9.DeclBlock.empty },
-            .c => .{ .c = link.File.C.DeclBlock.empty },
-            .wasm => .{ .wasm = link.File.Wasm.DeclBlock.empty },
-            .spirv => .{ .spirv = {} },
-        },
+        .link = try mod.comp.bin_file.createAtom(),
         .fn_link = switch (mod.comp.bin_file.tag) {
             .coff => .{ .coff = {} },
             .elf => .{ .elf = link.File.Elf.SrcFn.empty },

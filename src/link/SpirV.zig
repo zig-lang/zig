@@ -44,6 +44,12 @@ pub const FnData = struct {
     id: ResultId = undefined,
 };
 
+pub const Atom = struct {
+    base: link.File.Atom = .{ .tag = .spirv },
+
+    pub const base_atom_tag: link.File.Tag = .spirv;
+};
+
 base: link.File,
 
 /// This linker backend does not try to incrementally link output SPIR-V code.
@@ -99,6 +105,13 @@ pub fn openPath(allocator: *Allocator, sub_path: []const u8, options: link.Optio
 
 pub fn deinit(self: *SpirV) void {
     self.decl_table.deinit(self.base.allocator);
+}
+
+pub fn createAtom(self: *SpirV) !*link.File.Atom {
+    const atom = try self.base.allocator.create(Atom);
+    atom.* = Atom.empty;
+    try self.atoms.append(self.base.allocator, atom);
+    return &atom.base;
 }
 
 pub fn updateDecl(self: *SpirV, module: *Module, decl: *Module.Decl) !void {

@@ -36,8 +36,8 @@ ext_funcs: std.ArrayListUnmanaged(*Module.Decl) = .{},
 /// to support existing code.
 /// TODO: Allow setting this through a flag?
 host_name: []const u8 = "env",
-/// The last `DeclBlock` that was initialized will be saved here.
-last_block: ?*DeclBlock = null,
+/// The last `Atom` that was initialized will be saved here.
+last_atom: ?*Atom = null,
 /// Table with offsets, each element represents an offset with the value being
 /// the offset into the 'data' section where the data lives
 offset_table: std.ArrayListUnmanaged(u32) = .{},
@@ -48,6 +48,8 @@ offset_table_free_list: std.ArrayListUnmanaged(u32) = .{},
 /// This is ment for bookkeeping so we can safely cleanup all codegen memory
 /// when calling `deinit`
 symbols: std.ArrayListUnmanaged(*Module.Decl) = .{},
+
+atoms: std.ArrayListUnmanaged(*Atom) = .{},
 
 pub const FnData = struct {
     /// Generated code for the type of the function
@@ -65,26 +67,29 @@ pub const FnData = struct {
     };
 };
 
-pub const DeclBlock = struct {
-    /// Determines whether the `DeclBlock` has been initialized for codegen.
+pub const Atom = struct {
+    base: link.File.Atom = .{ .tag = .wasm },
+    /// Determines whether the `Atom` has been initialized for codegen.
     init: bool,
     /// Index into the `symbols` list.
     symbol_index: u32,
     /// Index into the offset table
     offset_index: u32,
-    /// The size of the block and how large part of the data section it occupies.
+    /// The size of the atom and how large part of the data section it occupies.
     /// Will be 0 when the Decl will not live inside the data section and `data` will be undefined.
     size: u32,
-    /// Points to the previous and next blocks.
-    /// Can be used to find the total size, and used to calculate the `offset` based on the previous block.
-    prev: ?*DeclBlock,
-    next: ?*DeclBlock,
+    /// Points to the previous and next atoms.
+    /// Can be used to find the total size, and used to calculate the `offset` based on the previous atom.
+    prev: ?*Atom,
+    next: ?*Atom,
     /// Pointer to data that will be written to the 'data' section.
     /// This data either lives in `FnData.code` or is externally managed.
     /// For data that does not live inside the 'data' section, this field will be undefined. (size == 0).
     data: [*]const u8,
 
-    pub const empty: DeclBlock = .{
+    pub const base_atom_tag: link.File.Tag = .wasm;
+
+    pub const empty: Atom = .{
         .init = false,
         .symbol_index = 0,
         .offset_index = 0,
@@ -94,8 +99,8 @@ pub const DeclBlock = struct {
         .data = undefined,
     };
 
-    /// Unplugs the `DeclBlock` from the chain
-    fn unplug(self: *DeclBlock) void {
+    /// Unplugs the `Atom` from the chain
+    fn unplug(self: *Atom) void {
         if (self.prev) |prev| {
             prev.next = self.next;
         }
@@ -155,26 +160,33 @@ pub fn deinit(self: *Wasm) void {
     self.symbols.deinit(self.base.allocator);
 }
 
+pub fn createAtom(self: *Wasm) !*File.Atom {
+    const atom = try self.base.allocator.create(Atom);
+    atom.* = Atom.empty;
+    try self.atoms.append(self.base.allocator, atom);
+    return &atom.base;
+}
+
 pub fn allocateDeclIndexes(self: *Wasm, decl: *Module.Decl) !void {
     if (decl.link.wasm.init) return;
 
     try self.offset_table.ensureCapacity(self.base.allocator, self.offset_table.items.len + 1);
     try self.symbols.ensureCapacity(self.base.allocator, self.symbols.items.len + 1);
 
-    const block = &decl.link.wasm;
-    block.init = true;
+    const atom = &decl.link.wasm;
+    atom.init = true;
 
-    block.symbol_index = @intCast(u32, self.symbols.items.len);
+    atom.symbol_index = @intCast(u32, self.symbols.items.len);
     self.symbols.appendAssumeCapacity(decl);
 
     if (self.offset_table_free_list.popOrNull()) |index| {
-        block.offset_index = index;
+        atom.offset_index = index;
     } else {
-        block.offset_index = @intCast(u32, self.offset_table.items.len);
+        atom.offset_index = @intCast(u32, self.offset_table.items.len);
         _ = self.offset_table.addOneAssumeCapacity();
     }
 
-    self.offset_table.items[block.offset_index] = 0;
+    self.offset_table.items[atom.offset_index] = 0;
 
     if (decl.ty.zigTypeTag() == .Fn) {
         switch (decl.val.tag()) {
@@ -227,7 +239,7 @@ pub fn updateDecl(self: *Wasm, module: *Module, decl: *Module.Decl) !void {
     fn_data.code = context.code.toUnmanaged();
     fn_data.functype = context.func_type_data.toUnmanaged();
 
-    const block = &decl.link.wasm;
+    const atom = &decl.link.wasm;
     if (decl.ty.zigTypeTag() == .Fn) {
         // as locals are patched afterwards, the offsets of funcidx's are off,
         // here we update them to correct them
@@ -236,21 +248,21 @@ pub fn updateDecl(self: *Wasm, module: *Module, decl: *Module.Decl) !void {
             func.offset += @intCast(u32, context.locals.items.len * 6);
         }
     } else {
-        block.size = @intCast(u32, code.len);
-        block.data = code.ptr;
+        atom.size = @intCast(u32, code.len);
+        atom.data = code.ptr;
     }
 
     // If we're updating an existing decl, unplug it first
     // to avoid infinite loops due to earlier links
-    block.unplug();
+    atom.unplug();
 
-    if (self.last_block) |last| {
-        if (last != block) {
-            last.next = block;
-            block.prev = last;
+    if (self.last_atom) |last| {
+        if (last != atom) {
+            last.next = atom;
+            atom.prev = last;
         }
     }
-    self.last_block = block;
+    self.last_atom = atom;
 }
 
 pub fn updateDeclExports(
@@ -273,22 +285,22 @@ pub fn freeDecl(self: *Wasm, decl: *Module.Decl) void {
             else => unreachable,
         }
     }
-    const block = &decl.link.wasm;
+    const atom = decl.link.wasm;
 
-    if (self.last_block == block) {
-        self.last_block = block.prev;
+    if (self.last_atom == atom) {
+        self.last_atom = atom.prev;
     }
 
-    block.unplug();
+    atom.unplug();
 
     self.offset_table_free_list.append(self.base.allocator, decl.link.wasm.offset_index) catch {};
-    _ = self.symbols.swapRemove(block.symbol_index);
+    _ = self.symbols.swapRemove(atom.symbol_index);
 
     // update symbol_index as we swap removed the last symbol into the removed's position
-    if (block.symbol_index < self.symbols.items.len)
-        self.symbols.items[block.symbol_index].link.wasm.symbol_index = block.symbol_index;
+    if (atom.symbol_index < self.symbols.items.len)
+        self.symbols.items[atom.symbol_index].link.wasm.symbol_index = atom.symbol_index;
 
-    block.init = false;
+    atom.init = false;
 
     decl.fn_link.wasm.functype.deinit(self.base.allocator);
     decl.fn_link.wasm.code.deinit(self.base.allocator);
@@ -320,8 +332,8 @@ pub fn flushModule(self: *Wasm, comp: *Compilation) !void {
 
     // The size of the data, this together with `offset_table_size` amounts to the
     // total size of the 'data' section
-    var first_decl: ?*DeclBlock = null;
-    const data_size: u32 = if (self.last_block) |last| blk: {
+    var first_decl: ?*Atom = null;
+    const data_size: u32 = if (self.last_atom) |last| blk: {
         var size = last.size;
         var cur = last;
         while (cur.prev) |prev| : (cur = prev) {
@@ -519,17 +531,17 @@ pub fn flushModule(self: *Wasm, comp: *Compilation) !void {
         const file_offset = try file.getPos();
         var cur = first_decl;
         var data_offset = offset_table_size;
-        while (cur) |cur_block| : (cur = cur_block.next) {
-            if (cur_block.size == 0) continue;
-            std.debug.assert(cur_block.init);
+        while (cur) |cur_atom| : (cur = cur_atom.next) {
+            if (cur_atom.size == 0) continue;
+            std.debug.assert(cur_atom.init);
 
-            const offset = (cur_block.offset_index) * ptr_width;
+            const offset = (cur_atom.offset_index) * ptr_width;
             var buf: [4]u8 = undefined;
             std.mem.writeIntLittle(u32, &buf, data_offset);
 
             try file.pwriteAll(&buf, file_offset + offset);
-            try file.pwriteAll(cur_block.data[0..cur_block.size], file_offset + data_offset);
-            data_offset += cur_block.size;
+            try file.pwriteAll(cur_atom.data[0..cur_atom.size], file_offset + data_offset);
+            data_offset += cur_atom.size;
         }
 
         try file.seekTo(file_offset + data_offset);
