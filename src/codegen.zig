@@ -2500,7 +2500,11 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
                         const got_addr = blk: {
                             const seg = macho_file.load_commands.items[macho_file.data_const_segment_cmd_index.?].Segment;
                             const got = seg.sections.items[macho_file.got_section_index.?];
-                            break :blk got.addr + func.owner_decl.link.macho.offset_table_index * @sizeOf(u64);
+                            const got_index = macho_file.got_entries_map.get(.{
+                                .where = .local,
+                                .where_index = func.owner_decl.link.macho.local_sym_index,
+                            }) orelse unreachable;
+                            break :blk got.addr + got_index * @sizeOf(u64);
                         };
                         log.debug("got_addr = 0x{x}", .{got_addr});
                         switch (arch) {
@@ -2519,37 +2523,29 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
                         }
                     } else if (func_value.castTag(.extern_fn)) |func_payload| {
                         const decl = func_payload.data;
-                        const decl_name = try std.fmt.allocPrint(self.bin_file.allocator, "_{s}", .{decl.name});
-                        defer self.bin_file.allocator.free(decl_name);
-                        const already_defined = macho_file.lazy_imports.contains(decl_name);
-                        const symbol: u32 = if (macho_file.lazy_imports.getIndex(decl_name)) |index|
-                            @intCast(u32, index)
-                        else
-                            try macho_file.addExternSymbol(decl_name);
-                        const start = self.code.items.len;
-                        const len: usize = blk: {
-                            switch (arch) {
-                                .x86_64 => {
-                                    // callq
-                                    try self.code.ensureCapacity(self.code.items.len + 5);
-                                    self.code.appendSliceAssumeCapacity(&[5]u8{ 0xe8, 0x0, 0x0, 0x0, 0x0 });
-                                    break :blk 5;
-                                },
-                                .aarch64 => {
-                                    // bl
-                                    writeInt(u32, try self.code.addManyAsArray(4), 0);
-                                    break :blk 4;
-                                },
-                                else => unreachable, // unsupported architecture on MachO
-                            }
-                        };
-                        try macho_file.stub_fixups.append(self.bin_file.allocator, .{
-                            .symbol = symbol,
-                            .already_defined = already_defined,
-                            .start = start,
-                            .len = len,
+                        const where_index = try macho_file.addExternFn(mem.spanZ(decl.name));
+                        const offset = @intCast(u32, self.code.items.len);
+                        switch (arch) {
+                            .x86_64 => {
+                                // callq
+                                try self.code.ensureCapacity(self.code.items.len + 5);
+                                self.code.appendSliceAssumeCapacity(&[5]u8{ 0xe8, 0x0, 0x0, 0x0, 0x0 });
+                            },
+                            .aarch64 => {
+                                // bl
+                                writeInt(u32, try self.code.addManyAsArray(4), Instruction.bl(0).toU32());
+                            },
+                            else => unreachable, // unsupported architecture on MachO
+                        }
+                        // Add relocation to the decl.
+                        try decl.link.macho.relocs.append(self.bin_file.allocator, .{
+                            .offset = offset,
+                            .where = .import,
+                            .where_index = where_index,
+                            .payload = .{ .branch = .{
+                                .arch = arch,
+                            } },
                         });
-                        // We mark the space and fix it up later.
                     } else {
                         return self.fail(inst.base.src, "TODO implement calling bitcasted functions", .{});
                     }
@@ -4351,7 +4347,11 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
                                 const got_addr = blk: {
                                     const seg = macho_file.load_commands.items[macho_file.data_const_segment_cmd_index.?].Segment;
                                     const got = seg.sections.items[macho_file.got_section_index.?];
-                                    break :blk got.addr + decl.link.macho.offset_table_index * ptr_bytes;
+                                    const got_index = macho_file.got_entries_map.get(.{
+                                        .where = .local,
+                                        .where_index = decl.link.macho.local_sym_index,
+                                    }) orelse unreachable;
+                                    break :blk got.addr + got_index * ptr_bytes;
                                 };
                                 return MCValue{ .memory = got_addr };
                             } else if (self.bin_file.cast(link.File.Coff)) |coff_file| {

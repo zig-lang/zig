@@ -11,6 +11,28 @@ const Allocator = std.mem.Allocator;
 const MachO = @import("../MachO.zig");
 const padToIdeal = MachO.padToIdeal;
 
+pub const HeaderArgs = struct {
+    magic: u32 = macho.MH_MAGIC_64,
+    cputype: macho.cpu_type_t = 0,
+    cpusubtype: macho.cpu_subtype_t = 0,
+    filetype: u32 = 0,
+    flags: u32 = 0,
+    reserved: u32 = 0,
+};
+
+pub fn emptyHeader(args: HeaderArgs) macho.mach_header_64 {
+    return .{
+        .magic = args.magic,
+        .cputype = args.cputype,
+        .cpusubtype = args.cpusubtype,
+        .filetype = args.filetype,
+        .ncmds = 0,
+        .sizeofcmds = 0,
+        .flags = args.flags,
+        .reserved = args.reserved,
+    };
+}
+
 pub const LoadCommand = union(enum) {
     Segment: SegmentCommand,
     DyldInfoOnly: macho.dyld_info_command,
@@ -401,6 +423,44 @@ fn makeStaticString(bytes: []const u8) [16]u8 {
     assert(bytes.len <= buf.len);
     mem.copy(u8, &buf, bytes);
     return buf;
+}
+
+fn parseName(name: *const [16]u8) []const u8 {
+    const len = mem.indexOfScalar(u8, name, @as(u8, 0)) orelse name.len;
+    return name[0..len];
+}
+
+pub fn segmentName(sect: macho.section_64) []const u8 {
+    return parseName(&sect.segname);
+}
+
+pub fn sectionName(sect: macho.section_64) []const u8 {
+    return parseName(&sect.sectname);
+}
+
+pub fn sectionType(sect: macho.section_64) u8 {
+    return @truncate(u8, sect.flags & 0xff);
+}
+
+pub fn sectionAttrs(sect: macho.section_64) u32 {
+    return sect.flags & 0xffffff00;
+}
+
+pub fn sectionIsCode(sect: macho.section_64) bool {
+    const attr = sectionAttrs(sect);
+    return attr & macho.S_ATTR_PURE_INSTRUCTIONS != 0 or attr & macho.S_ATTR_SOME_INSTRUCTIONS != 0;
+}
+
+pub fn sectionIsDebug(sect: macho.section_64) bool {
+    return sectionAttrs(sect) & macho.S_ATTR_DEBUG != 0;
+}
+
+pub fn sectionIsDontDeadStrip(sect: macho.section_64) bool {
+    return sectionAttrs(sect) & macho.S_ATTR_NO_DEAD_STRIP != 0;
+}
+
+pub fn sectionIsDontDeadStripIfReferencesLive(sect: macho.section_64) bool {
+    return sectionAttrs(sect) & macho.S_ATTR_LIVE_SUPPORT != 0;
 }
 
 fn testRead(allocator: *Allocator, buffer: []const u8, expected: anytype) !void {

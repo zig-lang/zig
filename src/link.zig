@@ -515,7 +515,7 @@ pub const File = struct {
         }
     }
 
-    fn linkAsArchive(base: *File, comp: *Compilation) !void {
+    pub fn linkAsArchive(base: *File, comp: *Compilation) !void {
         const tracy = trace(@src());
         defer tracy.end();
 

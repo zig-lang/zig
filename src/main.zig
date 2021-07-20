@@ -1646,6 +1646,18 @@ fn buildOutputType(
         }
     }
 
+    if (use_lld) |opt| {
+        if (opt and cross_target.isDarwin()) {
+            fatal("LLD requested with Mach-O object format. Only the self-hosted linker is supported for this target.", .{});
+        }
+    }
+
+    if (want_lto) |opt| {
+        if (opt and cross_target.isDarwin()) {
+            fatal("LTO is not yet supported with the Mach-O object format. More details: https://github.com/ziglang/zig/issues/8680", .{});
+        }
+    }
+
     if (comptime std.Target.current.isDarwin()) {
         // If we want to link against frameworks, we need system headers.
         if (framework_dirs.items.len > 0 or frameworks.items.len > 0)

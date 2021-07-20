@@ -3,7 +3,7 @@ const DebugSymbols = @This();
 const std = @import("std");
 const assert = std.debug.assert;
 const fs = std.fs;
-const log = std.log.scoped(.link);
+const log = std.log.scoped(.dsym);
 const macho = std.macho;
 const mem = std.mem;
 const DW = std.dwarf;
@@ -26,9 +26,6 @@ const page_size: u16 = 0x1000;
 
 base: *MachO,
 file: fs.File,
-
-/// Mach header
-header: ?macho.mach_header_64 = null,
 
 /// Table of all load commands
 load_commands: std.ArrayListUnmanaged(LoadCommand) = .{},
@@ -78,9 +75,8 @@ dbg_info_decl_last: ?*TextBlock = null,
 /// Table of debug symbol names aka the debug string table.
 debug_string_table: std.ArrayListUnmanaged(u8) = .{},
 
-header_dirty: bool = false,
 load_commands_dirty: bool = false,
-string_table_dirty: bool = false,
+strtab_dirty: bool = false,
 debug_string_table_dirty: bool = false,
 debug_abbrev_section_dirty: bool = false,
 debug_aranges_section_dirty: bool = false,
@@ -106,26 +102,10 @@ const min_nop_size = 2;
 /// You must call this function *after* `MachO.populateMissingMetadata()`
 /// has been called to get a viable debug symbols output.
 pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void {
-    if (self.header == null) {
-        const base_header = self.base.header.?;
-        var header: macho.mach_header_64 = undefined;
-        header.magic = macho.MH_MAGIC_64;
-        header.cputype = base_header.cputype;
-        header.cpusubtype = base_header.cpusubtype;
-        header.filetype = macho.MH_DSYM;
-        // These will get populated at the end of flushing the results to file.
-        header.ncmds = 0;
-        header.sizeofcmds = 0;
-        header.flags = 0;
-        header.reserved = 0;
-        self.header = header;
-        self.header_dirty = true;
-    }
     if (self.uuid_cmd_index == null) {
         const base_cmd = self.base.load_commands.items[self.base.uuid_cmd_index.?];
         self.uuid_cmd_index = @intCast(u16, self.load_commands.items.len);
         try self.load_commands.append(allocator, base_cmd);
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.symtab_cmd_index == null) {
@@ -134,11 +114,11 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
         const symtab_size = base_cmd.nsyms * @sizeOf(macho.nlist_64);
         const symtab_off = self.findFreeSpaceLinkedit(symtab_size, @sizeOf(macho.nlist_64));
 
-        log.debug("found dSym symbol table free space 0x{x} to 0x{x}", .{ symtab_off, symtab_off + symtab_size });
+        log.debug("found symbol table free space 0x{x} to 0x{x}", .{ symtab_off, symtab_off + symtab_size });
 
         const strtab_off = self.findFreeSpaceLinkedit(base_cmd.strsize, 1);
 
-        log.debug("found dSym string table free space 0x{x} to 0x{x}", .{ strtab_off, strtab_off + base_cmd.strsize });
+        log.debug("found string table free space 0x{x} to 0x{x}", .{ strtab_off, strtab_off + base_cmd.strsize });
 
         try self.load_commands.append(allocator, .{
             .Symtab = .{
@@ -150,16 +130,14 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
                 .strsize = base_cmd.strsize,
             },
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
-        self.string_table_dirty = true;
+        self.strtab_dirty = true;
     }
     if (self.pagezero_segment_cmd_index == null) {
         self.pagezero_segment_cmd_index = @intCast(u16, self.load_commands.items.len);
         const base_cmd = self.base.load_commands.items[self.base.pagezero_segment_cmd_index.?].Segment;
         const cmd = try self.copySegmentCommand(allocator, base_cmd);
         try self.load_commands.append(allocator, .{ .Segment = cmd });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.text_segment_cmd_index == null) {
@@ -167,7 +145,6 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
         const base_cmd = self.base.load_commands.items[self.base.text_segment_cmd_index.?].Segment;
         const cmd = try self.copySegmentCommand(allocator, base_cmd);
         try self.load_commands.append(allocator, .{ .Segment = cmd });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.data_const_segment_cmd_index == null) outer: {
@@ -176,7 +153,6 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
         const base_cmd = self.base.load_commands.items[self.base.data_const_segment_cmd_index.?].Segment;
         const cmd = try self.copySegmentCommand(allocator, base_cmd);
         try self.load_commands.append(allocator, .{ .Segment = cmd });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.data_segment_cmd_index == null) outer: {
@@ -185,7 +161,6 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
         const base_cmd = self.base.load_commands.items[self.base.data_segment_cmd_index.?].Segment;
         const cmd = try self.copySegmentCommand(allocator, base_cmd);
         try self.load_commands.append(allocator, .{ .Segment = cmd });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.linkedit_segment_cmd_index == null) {
@@ -196,7 +171,6 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
         cmd.inner.fileoff = self.linkedit_off;
         cmd.inner.filesize = self.linkedit_size;
         try self.load_commands.append(allocator, .{ .Segment = cmd });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.dwarf_segment_cmd_index == null) {
@@ -208,7 +182,7 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
         const off = linkedit.inner.fileoff + linkedit.inner.filesize;
         const vmaddr = linkedit.inner.vmaddr + linkedit.inner.vmsize;
 
-        log.debug("found dSym __DWARF segment free space 0x{x} to 0x{x}", .{ off, off + needed_size });
+        log.debug("found __DWARF segment free space 0x{x} to 0x{x}", .{ off, off + needed_size });
 
         try self.load_commands.append(allocator, .{
             .Segment = SegmentCommand.empty("__DWARF", .{
@@ -218,7 +192,6 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
                 .filesize = needed_size,
             }),
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
     }
     if (self.debug_str_section_index == null) {
@@ -232,7 +205,6 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
             .offset = @intCast(u32, dwarf_segment.inner.fileoff),
             .@"align" = 1,
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
         self.debug_string_table_dirty = true;
     }
@@ -244,7 +216,7 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
         const p_align = 1;
         const off = dwarf_segment.findFreeSpace(file_size_hint, p_align, null);
 
-        log.debug("found dSym __debug_info free space 0x{x} to 0x{x}", .{ off, off + file_size_hint });
+        log.debug("found __debug_info free space 0x{x} to 0x{x}", .{ off, off + file_size_hint });
 
         try dwarf_segment.addSection(allocator, "__debug_info", .{
             .addr = dwarf_segment.inner.vmaddr + off - dwarf_segment.inner.fileoff,
@@ -252,7 +224,6 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
             .offset = @intCast(u32, off),
             .@"align" = p_align,
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
         self.debug_info_header_dirty = true;
     }
@@ -264,7 +235,7 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
         const p_align = 1;
         const off = dwarf_segment.findFreeSpace(file_size_hint, p_align, null);
 
-        log.debug("found dSym __debug_abbrev free space 0x{x} to 0x{x}", .{ off, off + file_size_hint });
+        log.debug("found __debug_abbrev free space 0x{x} to 0x{x}", .{ off, off + file_size_hint });
 
         try dwarf_segment.addSection(allocator, "__debug_abbrev", .{
             .addr = dwarf_segment.inner.vmaddr + off - dwarf_segment.inner.fileoff,
@@ -272,7 +243,6 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
             .offset = @intCast(u32, off),
             .@"align" = p_align,
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
         self.debug_abbrev_section_dirty = true;
     }
@@ -284,7 +254,7 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
         const p_align = 16;
         const off = dwarf_segment.findFreeSpace(file_size_hint, p_align, null);
 
-        log.debug("found dSym __debug_aranges free space 0x{x} to 0x{x}", .{ off, off + file_size_hint });
+        log.debug("found __debug_aranges free space 0x{x} to 0x{x}", .{ off, off + file_size_hint });
 
         try dwarf_segment.addSection(allocator, "__debug_aranges", .{
             .addr = dwarf_segment.inner.vmaddr + off - dwarf_segment.inner.fileoff,
@@ -292,7 +262,6 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
             .offset = @intCast(u32, off),
             .@"align" = p_align,
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
         self.debug_aranges_section_dirty = true;
     }
@@ -304,7 +273,7 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
         const p_align = 1;
         const off = dwarf_segment.findFreeSpace(file_size_hint, p_align, null);
 
-        log.debug("found dSym __debug_line free space 0x{x} to 0x{x}", .{ off, off + file_size_hint });
+        log.debug("found __debug_line free space 0x{x} to 0x{x}", .{ off, off + file_size_hint });
 
         try dwarf_segment.addSection(allocator, "__debug_line", .{
             .addr = dwarf_segment.inner.vmaddr + off - dwarf_segment.inner.fileoff,
@@ -312,7 +281,6 @@ pub fn populateMissingMetadata(self: *DebugSymbols, allocator: *Allocator) !void
             .offset = @intCast(u32, off),
             .@"align" = p_align,
         });
-        self.header_dirty = true;
         self.load_commands_dirty = true;
         self.debug_line_header_dirty = true;
     }
@@ -624,9 +592,8 @@ pub fn flushModule(self: *DebugSymbols, allocator: *Allocator, options: link.Opt
     try self.writeLoadCommands(allocator);
     try self.writeHeader();
 
-    assert(!self.header_dirty);
     assert(!self.load_commands_dirty);
-    assert(!self.string_table_dirty);
+    assert(!self.strtab_dirty);
     assert(!self.debug_abbrev_section_dirty);
     assert(!self.debug_aranges_section_dirty);
     assert(!self.debug_string_table_dirty);
@@ -716,23 +683,38 @@ fn writeLoadCommands(self: *DebugSymbols, allocator: *Allocator) !void {
     }
 
     const off = @sizeOf(macho.mach_header_64);
-    log.debug("writing {} dSym load commands from 0x{x} to 0x{x}", .{ self.load_commands.items.len, off, off + sizeofcmds });
+    log.debug("writing {} load commands from 0x{x} to 0x{x}", .{ self.load_commands.items.len, off, off + sizeofcmds });
     try self.file.pwriteAll(buffer, off);
     self.load_commands_dirty = false;
 }
 
 fn writeHeader(self: *DebugSymbols) !void {
-    if (!self.header_dirty) return;
+    var header = emptyHeader(.{
+        .filetype = macho.MH_DSYM,
+    });
 
-    self.header.?.ncmds = @intCast(u32, self.load_commands.items.len);
-    var sizeofcmds: u32 = 0;
-    for (self.load_commands.items) |cmd| {
-        sizeofcmds += cmd.cmdsize();
+    switch (self.base.base.options.target.cpu.arch) {
+        .aarch64 => {
+            header.cputype = macho.CPU_TYPE_ARM64;
+            header.cpusubtype = macho.CPU_SUBTYPE_ARM_ALL;
+        },
+        .x86_64 => {
+            header.cputype = macho.CPU_TYPE_X86_64;
+            header.cpusubtype = macho.CPU_SUBTYPE_X86_64_ALL;
+        },
+        else => return error.UnsupportedCpuArchitecture,
     }
-    self.header.?.sizeofcmds = sizeofcmds;
-    log.debug("writing Mach-O dSym header {}", .{self.header.?});
-    try self.file.pwriteAll(mem.asBytes(&self.header.?), 0);
-    self.header_dirty = false;
+
+    header.ncmds = @intCast(u32, self.load_commands.items.len);
+    header.sizeofcmds = 0;
+
+    for (self.load_commands.items) |cmd| {
+        header.sizeofcmds += cmd.cmdsize();
+    }
+
+    log.debug("writing Mach-O header {}", .{header});
+
+    try self.file.pwriteAll(mem.asBytes(&header), 0);
 }
 
 fn allocatedSizeLinkedit(self: *DebugSymbols, start: u64) u64 {
@@ -798,7 +780,7 @@ fn relocateSymbolTable(self: *DebugSymbols) !void {
             const existing_size = symtab.nsyms * @sizeOf(macho.nlist_64);
 
             assert(new_symoff + existing_size <= self.linkedit_off + self.linkedit_size); // TODO expand LINKEDIT segment.
-            log.debug("relocating dSym symbol table from 0x{x}-0x{x} to 0x{x}-0x{x}", .{
+            log.debug("relocating symbol table from 0x{x}-0x{x} to 0x{x}-0x{x}", .{
                 symtab.symoff,
                 symtab.symoff + existing_size,
                 new_symoff,
@@ -820,30 +802,30 @@ pub fn writeLocalSymbol(self: *DebugSymbols, index: usize) !void {
     try self.relocateSymbolTable();
     const symtab = &self.load_commands.items[self.symtab_cmd_index.?].Symtab;
     const off = symtab.symoff + @sizeOf(macho.nlist_64) * index;
-    log.debug("writing dSym local symbol {} at 0x{x}", .{ index, off });
+    log.debug("writing local symbol {} at 0x{x}", .{ index, off });
     try self.file.pwriteAll(mem.asBytes(&self.base.locals.items[index]), off);
 }
 
 fn writeStringTable(self: *DebugSymbols) !void {
-    if (!self.string_table_dirty) return;
+    if (!self.strtab_dirty) return;
 
     const tracy = trace(@src());
     defer tracy.end();
 
     const symtab = &self.load_commands.items[self.symtab_cmd_index.?].Symtab;
     const allocated_size = self.allocatedSizeLinkedit(symtab.stroff);
-    const needed_size = mem.alignForwardGeneric(u64, self.base.string_table.items.len, @alignOf(u64));
+    const needed_size = mem.alignForwardGeneric(u64, self.base.strtab.items.len, @alignOf(u64));
 
     if (needed_size > allocated_size) {
         symtab.strsize = 0;
         symtab.stroff = @intCast(u32, self.findFreeSpaceLinkedit(needed_size, 1));
     }
     symtab.strsize = @intCast(u32, needed_size);
-    log.debug("writing dSym string table from 0x{x} to 0x{x}", .{ symtab.stroff, symtab.stroff + symtab.strsize });
+    log.debug("writing string table from 0x{x} to 0x{x}", .{ symtab.stroff, symtab.stroff + symtab.strsize });
 
-    try self.file.pwriteAll(self.base.string_table.items, symtab.stroff);
+    try self.file.pwriteAll(self.base.strtab.items, symtab.stroff);
     self.load_commands_dirty = true;
-    self.string_table_dirty = false;
+    self.strtab_dirty = false;
 }
 
 pub fn updateDeclLineNumber(self: *DebugSymbols, module: *Module, decl: *const Module.Decl) !void {

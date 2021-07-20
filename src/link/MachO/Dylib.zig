@@ -12,13 +12,12 @@ const fat = @import("fat.zig");
 
 const Allocator = mem.Allocator;
 const Arch = std.Target.Cpu.Arch;
-const Symbol = @import("Symbol.zig");
 const LibStub = @import("../tapi.zig").LibStub;
+const MachO = @import("../MachO.zig");
 
 usingnamespace @import("commands.zig");
 
 allocator: *Allocator,
-
 arch: ?Arch = null,
 header: ?macho.mach_header_64 = null,
 file: ?fs.File = null,
@@ -146,7 +145,12 @@ pub const CreateOpts = struct {
     id: ?Id = null,
 };
 
-pub fn createAndParseFromPath(allocator: *Allocator, arch: Arch, path: []const u8, opts: CreateOpts) Error!?[]*Dylib {
+pub fn createAndParseFromPath(
+    allocator: *Allocator,
+    arch: Arch,
+    path: []const u8,
+    opts: CreateOpts,
+) Error!?[]*Dylib {
     const file = fs.cwd().openFile(path, .{}) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => |e| return e,
@@ -320,7 +324,7 @@ fn parseSymbols(self: *Dylib) !void {
     _ = try self.file.?.preadAll(strtab, symtab_cmd.stroff + self.library_offset);
 
     for (slice) |sym| {
-        const add_to_symtab = Symbol.isExt(sym) and (Symbol.isSect(sym) or Symbol.isIndr(sym));
+        const add_to_symtab = MachO.symbolIsExt(sym) and (MachO.symbolIsSect(sym) or MachO.symbolIsIndr(sym));
 
         if (!add_to_symtab) continue;
 
@@ -501,22 +505,4 @@ pub fn parseDependentLibs(self: *Dylib, out: *std.ArrayList(*Dylib)) !void {
             log.warn("unable to resolve dependency {s}", .{id.name});
         }
     }
-}
-
-pub fn createProxy(self: *Dylib, sym_name: []const u8) !?*Symbol {
-    if (!self.symbols.contains(sym_name)) return null;
-
-    const name = try self.allocator.dupe(u8, sym_name);
-    const proxy = try self.allocator.create(Symbol.Proxy);
-    errdefer self.allocator.destroy(proxy);
-
-    proxy.* = .{
-        .base = .{
-            .@"type" = .proxy,
-            .name = name,
-        },
-        .file = self,
-    };
-
-    return &proxy.base;
 }
