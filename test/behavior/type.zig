@@ -427,7 +427,7 @@ test "Type.Union from regular enum" {
 
 test "Type.Fn" {
     // wasm doesn't support align attributes on functions
-    if (builtin.target.cpu.arch == .wasm32 or builtin.target.cpu.arch == .wasm64) return error.SkipZigTest;
+    if (builtin.cpu.arch == .wasm32 or builtin.cpu.arch == .wasm64) return error.SkipZigTest;
 
     const foo = struct {
         fn func(a: usize, b: bool) align(4) callconv(.C) usize {
@@ -443,7 +443,7 @@ test "Type.Fn" {
 
 test "Type.BoundFn" {
     // wasm doesn't support align attributes on functions
-    if (builtin.target.cpu.arch == .wasm32 or builtin.target.cpu.arch == .wasm64) return error.SkipZigTest;
+    if (builtin.cpu.arch == .wasm32 or builtin.cpu.arch == .wasm64) return error.SkipZigTest;
 
     const TestStruct = packed struct {
         pub fn foo(self: *const @This()) align(4) callconv(.Unspecified) void {

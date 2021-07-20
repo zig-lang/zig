@@ -4,18 +4,18 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("std");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const is_test = builtin.is_test;
-const os_tag = std.Target.current.os.tag;
-const arch = std.Target.current.cpu.arch;
-const abi = std.Target.current.abi;
+const os_tag = builtin.os.tag;
+const arch = builtin.cpu.arch;
+const abi = builtin.abi;
 
 const is_gnu = abi.isGnu();
 const is_mingw = os_tag == .windows and is_gnu;
 
 comptime {
-    const linkage = if (is_test) builtin.GlobalLinkage.Internal else builtin.GlobalLinkage.Weak;
-    const strong_linkage = if (is_test) builtin.GlobalLinkage.Internal else builtin.GlobalLinkage.Strong;
+    const linkage = if (is_test) std.builtin.GlobalLinkage.Internal else std.builtin.GlobalLinkage.Weak;
+    const strong_linkage = if (is_test) std.builtin.GlobalLinkage.Internal else std.builtin.GlobalLinkage.Strong;
 
     switch (arch) {
         .i386,
@@ -601,7 +601,7 @@ pub usingnamespace @import("compiler_rt/atomics.zig");
 
 // Avoid dragging in the runtime safety mechanisms into this .o file,
 // unless we're trying to test this file.
-pub fn panic(msg: []const u8, error_return_trace: ?*builtin.StackTrace) noreturn {
+pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace) noreturn {
     _ = error_return_trace;
     @setCold(true);
     if (is_test) {

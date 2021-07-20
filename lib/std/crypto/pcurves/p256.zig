@@ -65,7 +65,7 @@ pub const P256 = struct {
     }
 
     /// Create a point from serialized affine coordinates.
-    pub fn fromSerializedAffineCoordinates(xs: [32]u8, ys: [32]u8, endian: builtin.Endian) (NonCanonicalError || EncodingError)!P256 {
+    pub fn fromSerializedAffineCoordinates(xs: [32]u8, ys: [32]u8, endian: std.builtin.Endian) (NonCanonicalError || EncodingError)!P256 {
         const x = try Fe.fromBytes(xs, endian);
         const y = try Fe.fromBytes(ys, endian);
         return fromAffineCoordinates(.{ .x = x, .y = y });
@@ -402,7 +402,7 @@ pub const P256 = struct {
 
     /// Multiply an elliptic curve point by a scalar.
     /// Return error.IdentityElement if the result is the identity element.
-    pub fn mul(p: P256, s_: [32]u8, endian: builtin.Endian) IdentityElementError!P256 {
+    pub fn mul(p: P256, s_: [32]u8, endian: std.builtin.Endian) IdentityElementError!P256 {
         const s = if (endian == .Little) s_ else Fe.orderSwap(s_);
         if (p.is_base) {
             return pcMul16(&basePointPc, s, false);
@@ -414,7 +414,7 @@ pub const P256 = struct {
 
     /// Multiply an elliptic curve point by a *PUBLIC* scalar *IN VARIABLE TIME*
     /// This can be used for signature verification.
-    pub fn mulPublic(p: P256, s_: [32]u8, endian: builtin.Endian) IdentityElementError!P256 {
+    pub fn mulPublic(p: P256, s_: [32]u8, endian: std.builtin.Endian) IdentityElementError!P256 {
         const s = if (endian == .Little) s_ else Fe.orderSwap(s_);
         if (p.is_base) {
             return pcMul16(&basePointPc, s, true);
@@ -426,7 +426,7 @@ pub const P256 = struct {
 
     /// Double-base multiplication of public parameters - Compute (p1*s1)+(p2*s2) *IN VARIABLE TIME*
     /// This can be used for signature verification.
-    pub fn mulDoubleBasePublic(p1: P256, s1_: [32]u8, p2: P256, s2_: [32]u8, endian: builtin.Endian) IdentityElementError!P256 {
+    pub fn mulDoubleBasePublic(p1: P256, s1_: [32]u8, p2: P256, s2_: [32]u8, endian: std.builtin.Endian) IdentityElementError!P256 {
         const s1 = if (endian == .Little) s1_ else Fe.orderSwap(s1_);
         const s2 = if (endian == .Little) s2_ else Fe.orderSwap(s2_);
         try p1.rejectIdentity();

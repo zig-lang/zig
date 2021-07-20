@@ -6,9 +6,10 @@
 // Platform-dependent types and values that are used along with OS-specific APIs.
 
 const std = @import("../../std.zig");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const maxInt = std.math.maxInt;
-const arch = std.Target.current.cpu.arch;
+const arch = builtin.cpu.arch;
 
 pub usingnamespace @import("win32error.zig");
 pub usingnamespace @import("ntstatus.zig");

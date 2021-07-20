@@ -21,7 +21,7 @@
 
 const root = @import("root");
 const std = @import("std.zig");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const math = std.math;
 const mem = std.mem;
@@ -113,7 +113,7 @@ pub fn close(fd: fd_t) void {
         _ = wasi.fd_close(fd);
         return;
     }
-    if (comptime std.Target.current.isDarwin()) {
+    if (comptime builtin.target.isDarwin()) {
         // This avoids the EINTR problem.
         switch (darwin.getErrno(darwin.@"close$NOCANCEL"(fd))) {
             EBADF => unreachable, // Always a race condition.
@@ -141,7 +141,7 @@ pub fn getrandom(buffer: []u8) GetRandomError!void {
     if (builtin.os.tag == .linux or builtin.os.tag == .freebsd) {
         var buf = buffer;
         const use_c = builtin.os.tag != .linux or
-            std.c.versionCheck(builtin.Version{ .major = 2, .minor = 25, .patch = 0 }).ok;
+            std.c.versionCheck(std.builtin.Version{ .major = 2, .minor = 25, .patch = 0 }).ok;
 
         while (buf.len != 0) {
             const res = if (use_c) blk: {
@@ -360,7 +360,7 @@ pub fn read(fd: fd_t, buf: []u8) ReadError!usize {
     }
 
     // Prevents EINVAL.
-    const max_count = switch (std.Target.current.os.tag) {
+    const max_count = switch (builtin.os.tag) {
         .linux => 0x7ffff000,
         .macos, .ios, .watchos, .tvos => math.maxInt(i32),
         else => math.maxInt(isize),
@@ -398,7 +398,7 @@ pub fn read(fd: fd_t, buf: []u8) ReadError!usize {
 /// * Windows
 /// On these systems, the read races with concurrent writes to the same file descriptor.
 pub fn readv(fd: fd_t, iov: []const iovec) ReadError!usize {
-    if (std.Target.current.os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         // TODO improve this to use ReadFileScatter
         if (iov.len == 0) return @as(usize, 0);
         const first = iov[0];
@@ -489,7 +489,7 @@ pub fn pread(fd: fd_t, buf: []u8, offset: u64) PReadError!usize {
     }
 
     // Prevent EINVAL.
-    const max_count = switch (std.Target.current.os.tag) {
+    const max_count = switch (builtin.os.tag) {
         .linux => 0x7ffff000,
         .macos, .ios, .watchos, .tvos => math.maxInt(i32),
         else => math.maxInt(isize),
@@ -535,7 +535,7 @@ pub const TruncateError = error{
 } || UnexpectedError;
 
 pub fn ftruncate(fd: fd_t, length: u64) TruncateError!void {
-    if (std.Target.current.os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         var io_status_block: windows.IO_STATUS_BLOCK = undefined;
         var eof_info = windows.FILE_END_OF_FILE_INFORMATION{
             .EndOfFile = @bitCast(windows.LARGE_INTEGER, length),
@@ -556,7 +556,7 @@ pub fn ftruncate(fd: fd_t, length: u64) TruncateError!void {
             else => return windows.unexpectedStatus(rc),
         }
     }
-    if (std.Target.current.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi) {
         switch (wasi.fd_filestat_set_size(fd, length)) {
             wasi.ESUCCESS => return,
             wasi.EINTR => unreachable,
@@ -606,7 +606,7 @@ pub fn ftruncate(fd: fd_t, length: u64) TruncateError!void {
 /// * Windows
 /// On these systems, the read races with concurrent writes to the same file descriptor.
 pub fn preadv(fd: fd_t, iov: []const iovec, offset: u64) PReadError!usize {
-    const have_pread_but_not_preadv = switch (std.Target.current.os.tag) {
+    const have_pread_but_not_preadv = switch (builtin.os.tag) {
         .windows, .macos, .ios, .watchos, .tvos, .haiku => true,
         else => false,
     };
@@ -741,7 +741,7 @@ pub fn write(fd: fd_t, bytes: []const u8) WriteError!usize {
         }
     }
 
-    const max_count = switch (std.Target.current.os.tag) {
+    const max_count = switch (builtin.os.tag) {
         .linux => 0x7ffff000,
         .macos, .ios, .watchos, .tvos => math.maxInt(i32),
         else => math.maxInt(isize),
@@ -789,7 +789,7 @@ pub fn write(fd: fd_t, bytes: []const u8) WriteError!usize {
 ///
 /// If `iov.len` is larger than will fit in a `u31`, a partial write will occur.
 pub fn writev(fd: fd_t, iov: []const iovec_const) WriteError!usize {
-    if (std.Target.current.os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         // TODO improve this to use WriteFileScatter
         if (iov.len == 0) return @as(usize, 0);
         const first = iov[0];
@@ -864,7 +864,7 @@ pub const PWriteError = WriteError || error{Unseekable};
 /// The limit on Darwin is `0x7fffffff`, trying to write more than that returns EINVAL.
 /// The corresponding POSIX limit is `math.maxInt(isize)`.
 pub fn pwrite(fd: fd_t, bytes: []const u8, offset: u64) PWriteError!usize {
-    if (std.Target.current.os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         return windows.WriteFile(fd, bytes, offset, std.io.default_mode);
     }
     if (builtin.os.tag == .wasi) {
@@ -897,7 +897,7 @@ pub fn pwrite(fd: fd_t, bytes: []const u8, offset: u64) PWriteError!usize {
     }
 
     // Prevent EINVAL.
-    const max_count = switch (std.Target.current.os.tag) {
+    const max_count = switch (builtin.os.tag) {
         .linux => 0x7ffff000,
         .macos, .ios, .watchos, .tvos => math.maxInt(i32),
         else => math.maxInt(isize),
@@ -956,7 +956,7 @@ pub fn pwrite(fd: fd_t, bytes: []const u8, offset: u64) PWriteError!usize {
 ///
 /// If `iov.len` is larger than will fit in a `u31`, a partial write will occur.
 pub fn pwritev(fd: fd_t, iov: []const iovec_const, offset: u64) PWriteError!usize {
-    const have_pwrite_but_not_pwritev = switch (std.Target.current.os.tag) {
+    const have_pwrite_but_not_pwritev = switch (builtin.os.tag) {
         .windows, .macos, .ios, .watchos, .tvos, .haiku => true,
         else => false,
     };
@@ -1072,7 +1072,7 @@ pub const OpenError = error{
 /// Open and possibly create a file. Keeps trying if it gets interrupted.
 /// See also `openZ`.
 pub fn open(file_path: []const u8, flags: u32, perm: mode_t) OpenError!fd_t {
-    if (std.Target.current.os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         const file_path_w = try windows.sliceToPrefixedFileW(file_path);
         return openW(file_path_w.span(), flags, perm);
     }
@@ -1085,7 +1085,7 @@ pub const openC = @compileError("deprecated: renamed to openZ");
 /// Open and possibly create a file. Keeps trying if it gets interrupted.
 /// See also `open`.
 pub fn openZ(file_path: [*:0]const u8, flags: u32, perm: mode_t) OpenError!fd_t {
-    if (std.Target.current.os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         const file_path_w = try windows.cStrToPrefixedFileW(file_path);
         return openW(file_path_w.span(), flags, perm);
     }
@@ -2770,7 +2770,7 @@ pub fn socket(domain: u32, socket_type: u32, protocol: u32) SocketError!socket_t
         return rc;
     }
 
-    const have_sock_flags = comptime !std.Target.current.isDarwin();
+    const have_sock_flags = comptime !builtin.target.isDarwin();
     const filtered_sock_type = if (!have_sock_flags)
         socket_type & ~@as(u32, SOCK_NONBLOCK | SOCK_CLOEXEC)
     else
@@ -3069,7 +3069,7 @@ pub fn accept(
     ///   description  of the `O_CLOEXEC` flag in `open` for reasons why this may be useful.
     flags: u32,
 ) AcceptError!socket_t {
-    const have_accept4 = comptime !(std.Target.current.isDarwin() or builtin.os.tag == .windows);
+    const have_accept4 = comptime !(builtin.target.isDarwin() or builtin.os.tag == .windows);
     assert(0 == (flags & ~@as(u32, SOCK_NONBLOCK | SOCK_CLOEXEC))); // Unsupported flag(s)
 
     const accepted_sock = while (true) {
@@ -4665,7 +4665,7 @@ pub const ClockGetTimeError = error{UnsupportedClock} || UnexpectedError;
 /// TODO: change this to return the timespec as a return value
 /// TODO: look into making clk_id an enum
 pub fn clock_gettime(clk_id: i32, tp: *timespec) ClockGetTimeError!void {
-    if (std.Target.current.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi) {
         var ts: timestamp_t = undefined;
         switch (system.clock_time_get(@bitCast(u32, clk_id), 1, &ts)) {
             0 => {
@@ -4679,7 +4679,7 @@ pub fn clock_gettime(clk_id: i32, tp: *timespec) ClockGetTimeError!void {
         }
         return;
     }
-    if (std.Target.current.os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         if (clk_id == CLOCK_REALTIME) {
             var ft: windows.FILETIME = undefined;
             windows.kernel32.GetSystemTimeAsFileTime(&ft);
@@ -4706,7 +4706,7 @@ pub fn clock_gettime(clk_id: i32, tp: *timespec) ClockGetTimeError!void {
 }
 
 pub fn clock_getres(clk_id: i32, res: *timespec) ClockGetTimeError!void {
-    if (std.Target.current.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi) {
         var ts: timestamp_t = undefined;
         switch (system.clock_res_get(@bitCast(u32, clk_id), &ts)) {
             0 => res.* = .{
@@ -5278,19 +5278,19 @@ pub fn sendfile(
 
     // Prevents EOVERFLOW.
     const size_t = std.meta.Int(.unsigned, @typeInfo(usize).Int.bits - 1);
-    const max_count = switch (std.Target.current.os.tag) {
+    const max_count = switch (builtin.os.tag) {
         .linux => 0x7ffff000,
         .macos, .ios, .watchos, .tvos => math.maxInt(i32),
         else => math.maxInt(size_t),
     };
 
-    switch (std.Target.current.os.tag) {
+    switch (builtin.os.tag) {
         .linux => sf: {
             // sendfile() first appeared in Linux 2.2, glibc 2.1.
             const call_sf = comptime if (builtin.link_libc)
                 std.c.versionCheck(.{ .major = 2, .minor = 1 }).ok
             else
-                std.Target.current.os.version_range.linux.range.max.order(.{ .major = 2, .minor = 2 }) != .lt;
+                builtin.os.version_range.linux.range.max.order(.{ .major = 2, .minor = 2 }) != .lt;
             if (!call_sf) break :sf;
 
             if (headers.len != 0) {
@@ -5584,7 +5584,7 @@ pub fn copy_file_range(fd_in: fd_t, off_in: u64, fd_out: fd_t, off_out: u64, len
     const call_cfr = comptime if (builtin.link_libc)
         std.c.versionCheck(.{ .major = 2, .minor = 27, .patch = 0 }).ok
     else
-        std.Target.current.os.isAtLeast(.linux, .{ .major = 4, .minor = 5 }) orelse true;
+        builtin.os.isAtLeast(.linux, .{ .major = 4, .minor = 5 }) orelse true;
 
     if (call_cfr and has_copy_file_range_syscall.load(.Monotonic)) {
         var off_in_copy = @bitCast(i64, off_in);
@@ -6038,7 +6038,7 @@ pub fn syncfs(fd: fd_t) SyncError!void {
 
 /// Write all pending file contents and metadata modifications for the specified file descriptor to the underlying filesystem.
 pub fn fsync(fd: fd_t) SyncError!void {
-    if (std.Target.current.os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         if (windows.kernel32.FlushFileBuffers(fd) != 0)
             return;
         switch (windows.kernel32.GetLastError()) {
@@ -6062,7 +6062,7 @@ pub fn fsync(fd: fd_t) SyncError!void {
 
 /// Write all pending file contents for the specified file descriptor to the underlying filesystem, but not necessarily the metadata.
 pub fn fdatasync(fd: fd_t) SyncError!void {
-    if (std.Target.current.os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         return fsync(fd) catch |err| switch (err) {
             SyncError.AccessDenied => return, // fdatasync doesn't promise that the access time was synced
             else => return err,

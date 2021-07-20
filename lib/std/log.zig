@@ -75,7 +75,7 @@
 //! ```
 
 const std = @import("std.zig");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const root = @import("root");
 
 pub const Level = enum {
@@ -145,7 +145,7 @@ fn log(
             if (@typeInfo(@TypeOf(root.log)) != .Fn)
                 @compileError("Expected root.log to be a function");
             root.log(message_level, scope, format, args);
-        } else if (std.Target.current.os.tag == .freestanding) {
+        } else if (builtin.os.tag == .freestanding) {
             // On freestanding one must provide a log function; we do not have
             // any I/O configured.
             return;

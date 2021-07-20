@@ -11,7 +11,7 @@ const fmt = std.fmt;
 const mem = std.mem;
 const math = std.math;
 const testing = std.testing;
-const native_os = std.Target.current.os;
+const native_os = @import("builtin").os;
 
 /// Resolves a network interface name into a scope/zone ID. It returns
 /// an error if either resolution fails, or if the interface name is

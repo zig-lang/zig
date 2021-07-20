@@ -4,6 +4,7 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const mem = std.mem;
 const testing = std.testing;
@@ -413,7 +414,7 @@ fn testVersionEquality(expected: std.builtin.Version, got: std.builtin.Version) 
 /// `-syslibroot` param of the linker.
 /// The caller needs to free the resulting path slice.
 pub fn getSDKPath(allocator: *mem.Allocator) ![]u8 {
-    assert(Target.current.isDarwin());
+    assert(builtin.target.isDarwin());
     const argv = &[_][]const u8{ "xcrun", "--show-sdk-path" };
     const result = try std.ChildProcess.exec(.{ .allocator = allocator, .argv = argv });
     defer {
@@ -441,7 +442,7 @@ pub fn detectNativeCpuAndFeatures() ?Target.Cpu {
         error.Unexpected => unreachable, // EFAULT: stack should be safe, EISDIR/ENOTDIR: constant, known good value
     };
 
-    const current_arch = Target.current.cpu.arch;
+    const current_arch = builtin.cpu.arch;
     switch (current_arch) {
         .aarch64, .aarch64_be, .aarch64_32 => {
             const model = switch (cpu_family) {

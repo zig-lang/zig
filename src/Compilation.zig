@@ -1,6 +1,7 @@
 const Compilation = @This();
 
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
@@ -905,9 +906,9 @@ pub fn create(gpa: *Allocator, options: InitOptions) !*Compilation {
 
         const darwin_can_use_system_sdk =
             // comptime conditions
-            ((build_options.have_llvm and comptime std.Target.current.isDarwin()) and
+            ((build_options.have_llvm and comptime builtin.target.isDarwin()) and
             // runtime conditions
-            (use_lld and std.builtin.os.tag == .macos and options.target.isDarwin()));
+            (use_lld and builtin.os.tag == .macos and options.target.isDarwin()));
 
         const sysroot = blk: {
             if (options.sysroot) |sysroot| {
@@ -2025,7 +2026,7 @@ pub fn performAllTheWork(self: *Compilation) error{ TimerUnsupported, OutOfMemor
                     log.debug("analyze liveness of {s}", .{decl.name});
                     try liveness.analyze(module.gpa, &decl_arena.allocator, func.body);
 
-                    if (std.builtin.mode == .Debug and self.verbose_air) {
+                    if (builtin.mode == .Debug and self.verbose_air) {
                         func.dump(module.*);
                     }
                 }
@@ -3407,7 +3408,7 @@ fn detectLibCIncludeDirs(
     // native abi, fall back to using the system libc installation.
     // On windows, instead of the native (mingw) abi, we want to check
     // for the MSVC abi as a fallback.
-    const use_system_abi = if (std.Target.current.os.tag == .windows)
+    const use_system_abi = if (builtin.os.tag == .windows)
         target.abi == .msvc
     else
         is_native_abi;

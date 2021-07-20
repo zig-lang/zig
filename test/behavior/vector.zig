@@ -348,7 +348,7 @@ test "vector division operators" {
 
         fn doTheTest() !void {
             // https://github.com/ziglang/zig/issues/4952
-            if (builtin.target.os.tag != .windows) {
+            if (builtin.os.tag != .windows) {
                 try doTheTestDiv(f16, [4]f16{ 4.0, -4.0, 4.0, -4.0 }, [4]f16{ 1.0, 2.0, -1.0, -2.0 });
             }
 
@@ -356,7 +356,7 @@ test "vector division operators" {
             try doTheTestDiv(f64, [4]f64{ 4.0, -4.0, 4.0, -4.0 }, [4]f64{ 1.0, 2.0, -1.0, -2.0 });
 
             // https://github.com/ziglang/zig/issues/4952
-            if (builtin.target.os.tag != .windows) {
+            if (builtin.os.tag != .windows) {
                 try doTheTestMod(f16, [4]f16{ 4.0, -4.0, 4.0, -4.0 }, [4]f16{ 1.0, 2.0, 0.5, 3.0 });
             }
             try doTheTestMod(f32, [4]f32{ 4.0, -4.0, 4.0, -4.0 }, [4]f32{ 1.0, 2.0, 0.5, 3.0 });
@@ -473,7 +473,7 @@ test "vector shift operators" {
         }
     };
 
-    switch (builtin.target.cpu.arch) {
+    switch (builtin.cpu.arch) {
         .i386,
         .aarch64,
         .aarch64_be,
@@ -549,7 +549,7 @@ test "vector reduce operation" {
 
             // LLVM 11 ERROR: Cannot select type
             // https://github.com/ziglang/zig/issues/7138
-            if (builtin.target.cpu.arch != .aarch64) {
+            if (builtin.cpu.arch != .aarch64) {
                 try doTheTestReduce(.Min, [4]i64{ 1234567, -386, 0, 3 }, @as(i64, -386));
                 try doTheTestReduce(.Min, [4]u64{ 99, 9999, 9, 99999 }, @as(u64, 9));
             }
@@ -567,7 +567,7 @@ test "vector reduce operation" {
 
             // LLVM 11 ERROR: Cannot select type
             // https://github.com/ziglang/zig/issues/7138
-            if (builtin.target.cpu.arch != .aarch64) {
+            if (builtin.cpu.arch != .aarch64) {
                 try doTheTestReduce(.Max, [4]i64{ 1234567, -386, 0, 3 }, @as(i64, 1234567));
                 try doTheTestReduce(.Max, [4]u64{ 99, 9999, 9, 99999 }, @as(u64, 99999));
             }

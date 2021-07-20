@@ -4,7 +4,7 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("std");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const page_size = std.mem.page_size;
 
 pub const tokenizer = @import("c/tokenizer.zig");
@@ -17,7 +17,7 @@ test {
 
 pub usingnamespace @import("os/bits.zig");
 
-pub usingnamespace switch (std.Target.current.os.tag) {
+pub usingnamespace switch (builtin.os.tag) {
     .linux => @import("c/linux.zig"),
     .windows => @import("c/windows.zig"),
     .macos, .ios, .tvos, .watchos => @import("c/darwin.zig"),
@@ -49,13 +49,13 @@ pub fn getErrno(rc: anytype) c_int {
 /// If linking gnu libc (glibc), the `ok` value will be true if the target
 /// version is greater than or equal to `glibc_version`.
 /// If linking a libc other than these, returns `false`.
-pub fn versionCheck(glibc_version: builtin.Version) type {
+pub fn versionCheck(glibc_version: std.builtin.Version) type {
     return struct {
         pub const ok = blk: {
             if (!builtin.link_libc) break :blk false;
-            if (std.Target.current.abi.isMusl()) break :blk true;
-            if (std.Target.current.isGnuLibC()) {
-                const ver = std.Target.current.os.version_range.linux.glibc;
+            if (builtin.abi.isMusl()) break :blk true;
+            if (builtin.target.isGnuLibC()) {
+                const ver = builtin.os.version_range.linux.glibc;
                 const order = ver.order(glibc_version);
                 break :blk switch (order) {
                     .gt, .eq => true,
@@ -381,9 +381,9 @@ pub extern "c" fn openlog(ident: [*:0]const u8, logopt: c_int, facility: c_int) 
 pub extern "c" fn closelog() void;
 pub extern "c" fn setlogmask(maskpri: c_int) c_int;
 
-pub const max_align_t = if (std.Target.current.abi == .msvc)
+pub const max_align_t = if (builtin.abi == .msvc)
     f64
-else if (std.Target.current.isDarwin())
+else if (builtin.target.isDarwin())
     c_longdouble
 else
     extern struct {

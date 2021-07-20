@@ -46,7 +46,7 @@ fn AesGcm(comptime Aes: anytype) type {
             mac.pad();
 
             mem.writeIntBig(u32, j[nonce_length..][0..4], 2);
-            modes.ctr(@TypeOf(aes), aes, c, m, j, builtin.Endian.Big);
+            modes.ctr(@TypeOf(aes), aes, c, m, j, std.builtin.Endian.Big);
             mac.update(c[0..m.len][0..]);
             mac.pad();
 
@@ -100,7 +100,7 @@ fn AesGcm(comptime Aes: anytype) type {
             }
 
             mem.writeIntBig(u32, j[nonce_length..][0..4], 2);
-            modes.ctr(@TypeOf(aes), aes, m, c, j, builtin.Endian.Big);
+            modes.ctr(@TypeOf(aes), aes, m, c, j, std.builtin.Endian.Big);
         }
     };
 }

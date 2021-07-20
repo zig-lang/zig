@@ -8,7 +8,7 @@ const fmt = std.fmt;
 const mem = std.mem;
 const fs = std.fs;
 const warn = std.debug.warn;
-const Mode = builtin.Mode;
+const Mode = std.builtin.Mode;
 
 pub const CompareOutputContext = struct {
     b: *build.Builder,

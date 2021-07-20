@@ -82,7 +82,7 @@ pub fn Writer(
         }
 
         /// TODO audit non-power-of-two int sizes
-        pub fn writeInt(self: Self, comptime T: type, value: T, endian: builtin.Endian) Error!void {
+        pub fn writeInt(self: Self, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
             var bytes: [(@typeInfo(T).Int.bits + 7) / 8]u8 = undefined;
             mem.writeInt(T, &bytes, value, endian);
             return self.writeAll(&bytes);
@@ -90,7 +90,7 @@ pub fn Writer(
 
         pub fn writeStruct(self: Self, value: anytype) Error!void {
             // Only extern and packed structs have defined in-memory layout.
-            comptime assert(@typeInfo(@TypeOf(value)).Struct.layout != builtin.TypeInfo.ContainerLayout.Auto);
+            comptime assert(@typeInfo(@TypeOf(value)).Struct.layout != std.builtin.TypeInfo.ContainerLayout.Auto);
             return self.writeAll(mem.asBytes(&value));
         }
     };

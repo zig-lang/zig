@@ -4,9 +4,9 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("../std.zig");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const testing = std.testing;
-const builtin = std.builtin;
 const Lock = std.event.Lock;
 
 /// This is a value that starts out unavailable, until resolve() is called

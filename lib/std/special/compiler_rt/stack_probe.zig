@@ -3,7 +3,7 @@
 // This file is part of [zig](https://ziglang.org/), which is MIT licensed.
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
-const native_arch = @import("std").Target.current.cpu.arch;
+const native_arch = @import("builtin").target.cpu.arch;
 
 // Zig's own stack-probe routine (available only on x86 and x86_64)
 pub fn zig_probe_stack() callconv(.Naked) void {

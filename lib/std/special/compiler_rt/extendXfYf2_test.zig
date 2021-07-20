@@ -96,7 +96,7 @@ test "extendhfsf2" {
     try test__extendhfsf2(0x7f00, 0x7fe00000); // sNaN
     // On x86 the NaN becomes quiet because the return is pushed on the x87
     // stack due to ABI requirements
-    if (builtin.target.cpu.arch != .i386 and builtin.target.os.tag == .windows)
+    if (builtin.cpu.arch != .i386 and builtin.os.tag == .windows)
         try test__extendhfsf2(0x7c01, 0x7f802000); // sNaN
 
     try test__extendhfsf2(0, 0); // 0

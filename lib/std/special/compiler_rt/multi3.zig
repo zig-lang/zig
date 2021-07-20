@@ -5,8 +5,9 @@
 // and substantial portions of the software.
 const compiler_rt = @import("../compiler_rt.zig");
 const std = @import("std");
-const is_test = std.builtin.is_test;
-const native_endian = std.Target.current.cpu.arch.endian();
+const builtin = @import("builtin");
+const is_test = builtin.is_test;
+const native_endian = builtin.cpu.arch.endian();
 
 // Ported from git@github.com:llvm-project/llvm-project-20170507.git
 // ae684fad6d34858c014c94da69c15e7774a633c3

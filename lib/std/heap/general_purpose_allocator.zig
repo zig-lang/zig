@@ -98,6 +98,7 @@
 //! in a `std.HashMap` using the backing allocator.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const log = std.log.scoped(.gpa);
 const math = std.math;
 const assert = std.debug.assert;
@@ -109,7 +110,7 @@ const StackTrace = std.builtin.StackTrace;
 /// Integer type for pointing to slots in a small allocation
 const SlotIndex = std.meta.Int(.unsigned, math.log2(page_size) + 1);
 
-const sys_can_stack_trace = switch (std.Target.current.cpu.arch) {
+const sys_can_stack_trace = switch (builtin.cpu.arch) {
     // Observed to go into an infinite loop.
     // TODO: Make this work.
     .mips,
@@ -120,13 +121,13 @@ const sys_can_stack_trace = switch (std.Target.current.cpu.arch) {
     // "Non-Emscripten WebAssembly hasn't implemented __builtin_return_address".
     .wasm32,
     .wasm64,
-    => std.Target.current.os.tag == .emscripten,
+    => builtin.os.tag == .emscripten,
 
     else => true,
 };
-const default_test_stack_trace_frames: usize = if (std.builtin.is_test) 8 else 4;
+const default_test_stack_trace_frames: usize = if (builtin.is_test) 8 else 4;
 const default_sys_stack_trace_frames: usize = if (sys_can_stack_trace) default_test_stack_trace_frames else 0;
-const default_stack_trace_frames: usize = switch (std.builtin.mode) {
+const default_stack_trace_frames: usize = switch (builtin.mode) {
     .Debug => default_sys_stack_trace_frames,
     else => 0,
 };
@@ -146,7 +147,7 @@ pub const Config = struct {
     safety: bool = std.debug.runtime_safety,
 
     /// Whether the allocator may be used simultaneously from multiple threads.
-    thread_safe: bool = !std.builtin.single_threaded,
+    thread_safe: bool = !builtin.single_threaded,
 
     /// What type of mutex you'd like to use, for thread safety.
     /// when specfied, the mutex type must have the same shape as `std.Thread.Mutex` and
@@ -996,7 +997,7 @@ test "shrink large object to large object with larger alignment" {
     var slice = try allocator.alignedAlloc(u8, 16, alloc_size);
     defer allocator.free(slice);
 
-    const big_alignment: usize = switch (std.Target.current.os.tag) {
+    const big_alignment: usize = switch (builtin.os.tag) {
         .windows => page_size * 32, // Windows aligns to 64K.
         else => page_size * 2,
     };
@@ -1066,7 +1067,7 @@ test "realloc large object to larger alignment" {
     var slice = try allocator.alignedAlloc(u8, 16, page_size * 2 + 50);
     defer allocator.free(slice);
 
-    const big_alignment: usize = switch (std.Target.current.os.tag) {
+    const big_alignment: usize = switch (builtin.os.tag) {
         .windows => page_size * 32, // Windows aligns to 64K.
         else => page_size * 2,
     };

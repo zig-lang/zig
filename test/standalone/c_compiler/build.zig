@@ -1,12 +1,13 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Builder = std.build.Builder;
 const CrossTarget = std.zig.CrossTarget;
 
 fn isRunnableTarget(t: CrossTarget) bool {
     if (t.isNative()) return true;
 
-    return (t.getOsTag() == std.Target.current.os.tag and
-        t.getCpuArch() == std.Target.current.cpu.arch);
+    return (t.getOsTag() == builtin.os.tag and
+        t.getCpuArch() == builtin.cpu.arch);
 }
 
 pub fn build(b: *Builder) void {

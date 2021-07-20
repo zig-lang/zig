@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 const math = std.math;
 const assert = std.debug.assert;
@@ -427,7 +428,7 @@ fn Function(comptime arch: std.Target.Cpu.Arch) type {
             code: *std.ArrayList(u8),
             debug_output: DebugInfoOutput,
         ) GenerateSymbolError!Result {
-            if (build_options.skip_non_native and std.Target.current.cpu.arch != arch) {
+            if (build_options.skip_non_native and builtin.cpu.arch != arch) {
                 @panic("Attempted to compile for architecture that was disabled by build configuration");
             }
 

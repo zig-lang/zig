@@ -13,6 +13,7 @@
 //! * `initial_delay_ms`
 
 const std = @import("std");
+const builtin = @import("builtin");
 const windows = std.os.windows;
 const testing = std.testing;
 const assert = std.debug.assert;
@@ -146,10 +147,10 @@ pub fn start(self: *Progress, name: []const u8, estimated_total_items: usize) !*
     if (stderr.supportsAnsiEscapeCodes()) {
         self.terminal = stderr;
         self.supports_ansi_escape_codes = true;
-    } else if (std.builtin.os.tag == .windows and stderr.isTty()) {
+    } else if (builtin.os.tag == .windows and stderr.isTty()) {
         self.is_windows_terminal = true;
         self.terminal = stderr;
-    } else if (std.builtin.os.tag != .windows) {
+    } else if (builtin.os.tag != .windows) {
         // we are in a "dumb" terminal like in acme or writing to a file
         self.terminal = stderr;
     }
@@ -211,7 +212,7 @@ fn refreshWithHeldLock(self: *Progress) void {
         const seq_before = DECSC ++ ED;
         std.mem.copy(u8, self.output_buffer[end..], seq_before);
         end += seq_before.len;
-    } else if (std.builtin.os.tag == .windows) winapi: {
+    } else if (builtin.os.tag == .windows) winapi: {
         std.debug.assert(self.is_windows_terminal);
 
         var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
@@ -300,7 +301,7 @@ fn refreshWithHeldLock(self: *Progress) void {
         self.terminal = null;
     };
 
-    if (std.builtin.os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         if (self.is_windows_terminal) {
             const res = windows.kernel32.SetConsoleCursorPosition(file.handle, saved_cursor_pos);
             std.debug.assert(res == windows.TRUE);

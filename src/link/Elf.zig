@@ -1,6 +1,7 @@
 const Elf = @This();
 
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
@@ -753,7 +754,7 @@ pub fn flushModule(self: *Elf, comp: *Compilation) !void {
     const module = self.base.options.module orelse return error.LinkingWithoutZigSourceUnimplemented;
 
     const target_endian = self.base.options.target.cpu.arch.endian();
-    const foreign_endian = target_endian != std.Target.current.cpu.arch.endian();
+    const foreign_endian = target_endian != builtin.cpu.arch.endian();
     const ptr_width_bytes: u8 = self.ptrWidthBytes();
     const init_len_size: usize = switch (self.ptr_width) {
         .p32 => 4,
@@ -2750,7 +2751,7 @@ pub fn deleteExport(self: *Elf, exp: Export) void {
 }
 
 fn writeProgHeader(self: *Elf, index: usize) !void {
-    const foreign_endian = self.base.options.target.cpu.arch.endian() != std.Target.current.cpu.arch.endian();
+    const foreign_endian = self.base.options.target.cpu.arch.endian() != builtin.cpu.arch.endian();
     const offset = self.program_headers.items[index].p_offset;
     switch (self.ptr_width) {
         .p32 => {
@@ -2771,7 +2772,7 @@ fn writeProgHeader(self: *Elf, index: usize) !void {
 }
 
 fn writeSectHeader(self: *Elf, index: usize) !void {
-    const foreign_endian = self.base.options.target.cpu.arch.endian() != std.Target.current.cpu.arch.endian();
+    const foreign_endian = self.base.options.target.cpu.arch.endian() != builtin.cpu.arch.endian();
     switch (self.ptr_width) {
         .p32 => {
             var shdr: [1]elf.Elf32_Shdr = undefined;
@@ -2869,7 +2870,7 @@ fn writeSymbol(self: *Elf, index: usize) !void {
         syms_sect.sh_size = needed_size; // anticipating adding the global symbols later
         self.shdr_table_dirty = true; // TODO look into only writing one section
     }
-    const foreign_endian = self.base.options.target.cpu.arch.endian() != std.Target.current.cpu.arch.endian();
+    const foreign_endian = self.base.options.target.cpu.arch.endian() != builtin.cpu.arch.endian();
     switch (self.ptr_width) {
         .p32 => {
             var sym = [1]elf.Elf32_Sym{
@@ -2905,7 +2906,7 @@ fn writeAllGlobalSymbols(self: *Elf) !void {
         .p32 => @sizeOf(elf.Elf32_Sym),
         .p64 => @sizeOf(elf.Elf64_Sym),
     };
-    const foreign_endian = self.base.options.target.cpu.arch.endian() != std.Target.current.cpu.arch.endian();
+    const foreign_endian = self.base.options.target.cpu.arch.endian() != builtin.cpu.arch.endian();
     const global_syms_off = syms_sect.sh_offset + self.local_symbols.items.len * sym_size;
     switch (self.ptr_width) {
         .p32 => {

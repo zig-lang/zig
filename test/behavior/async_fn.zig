@@ -112,7 +112,7 @@ test "calling an inferred async function" {
 }
 
 test "@frameSize" {
-    if (builtin.target.cpu.arch == .thumb or builtin.target.cpu.arch == .thumbeb)
+    if (builtin.cpu.arch == .thumb or builtin.cpu.arch == .thumbeb)
         return error.SkipZigTest;
 
     const S = struct {

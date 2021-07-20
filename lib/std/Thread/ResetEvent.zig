@@ -14,7 +14,7 @@
 
 const ResetEvent = @This();
 const std = @import("../std.zig");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const testing = std.testing;
 const assert = std.debug.assert;
 const c = std.c;
@@ -25,7 +25,7 @@ impl: Impl,
 
 pub const Impl = if (builtin.single_threaded)
     std.Thread.StaticResetEvent.DebugEvent
-else if (std.Target.current.isDarwin())
+else if (builtin.target.isDarwin())
     DarwinEvent
 else if (std.Thread.use_pthreads)
     PosixEvent

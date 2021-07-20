@@ -4,7 +4,7 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("../../std.zig");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const maxInt = std.math.maxInt;
 
 pub const blkcnt_t = i64;
@@ -765,7 +765,7 @@ comptime {
         std.debug.assert(@sizeOf(siginfo_t) == 136);
 }
 
-pub usingnamespace switch (builtin.target.cpu.arch) {
+pub usingnamespace switch (builtin.cpu.arch) {
     .x86_64 => struct {
         pub const ucontext_t = extern struct {
             sc_rdi: c_long,
@@ -942,7 +942,7 @@ pub const EPROTO = 95; // Protocol error
 
 pub const ELAST = 95; // Must equal largest errno
 
-const _MAX_PAGE_SHIFT = switch (builtin.target.cpu.arch) {
+const _MAX_PAGE_SHIFT = switch (builtin.cpu.arch) {
     .i386 => 12,
     .sparcv9 => 13,
 };

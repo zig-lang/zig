@@ -14,7 +14,7 @@ const root = @import("root");
 pub const trait = @import("meta/trait.zig");
 pub const TrailerFlags = @import("meta/trailer_flags.zig").TrailerFlags;
 
-const TypeInfo = builtin.TypeInfo;
+const TypeInfo = std.builtin.TypeInfo;
 
 pub fn tagName(v: anytype) []const u8 {
     const T = @TypeOf(v);
@@ -860,7 +860,7 @@ pub fn declList(comptime Namespace: type, comptime Decl: type) []const *const De
 
 pub const IntType = @compileError("replaced by std.meta.Int");
 
-pub fn Int(comptime signedness: builtin.Signedness, comptime bit_count: u16) type {
+pub fn Int(comptime signedness: std.builtin.Signedness, comptime bit_count: u16) type {
     return @Type(TypeInfo{
         .Int = .{
             .signedness = signedness,

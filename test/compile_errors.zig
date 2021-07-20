@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const TestContext = @import("../src/test.zig").TestContext;
 
 pub fn addCases(ctx: *TestContext) !void {
@@ -2042,7 +2043,7 @@ pub fn addCases(ctx: *TestContext) !void {
     ctx.objErrStage1("attempt to create 17 bit float type",
         \\const builtin = @import("std").builtin;
         \\comptime {
-        \\    _ = @Type(builtin.TypeInfo { .Float = builtin.TypeInfo.Float { .bits = 17 } });
+        \\    _ = @Type(builtin.TypeInfo { .Float = std.builtin.TypeInfo.Float { .bits = 17 } });
         \\}
     , &[_][]const u8{
         "tmp.zig:3:32: error: 17-bit float unsupported",
@@ -2058,7 +2059,7 @@ pub fn addCases(ctx: *TestContext) !void {
 
     ctx.objErrStage1("@Type with non-constant expression",
         \\const builtin = @import("std").builtin;
-        \\var globalTypeInfo : builtin.TypeInfo = undefined;
+        \\var globalTypeInfo : std.builtin.TypeInfo = undefined;
         \\export fn entry() void {
         \\    _ = @Type(globalTypeInfo);
         \\}
@@ -2878,7 +2879,7 @@ pub fn addCases(ctx: *TestContext) !void {
         "tmp.zig:2:18: error: invalid operands to binary expression: 'error{A}' and 'error{B}'",
     });
 
-    if (std.Target.current.os.tag == .linux) {
+    if (builtin.os.tag == .linux) {
         ctx.testErrStage1("implicit dependency on libc",
             \\extern "c" fn exit(u8) void;
             \\export fn entry() void {
@@ -6848,7 +6849,7 @@ pub fn addCases(ctx: *TestContext) !void {
     ctx.objErrStage1("invalid member of builtin enum",
         \\const builtin = @import("std").builtin;
         \\export fn entry() void {
-        \\    const foo = builtin.Mode.x86;
+        \\    const foo = std.builtin.Mode.x86;
         \\    _ = foo;
         \\}
     , &[_][]const u8{
@@ -8786,9 +8787,10 @@ pub fn addCases(ctx: *TestContext) !void {
 
     ctx.objErrStage1("Issue #9165: windows tcp server compilation error",
         \\const std = @import("std");
+        \\const builtin = @import("builtin");
         \\pub const io_mode = .evented;
         \\pub fn main() !void {
-        \\    if (std.builtin.os.tag == .windows) {
+        \\    if (builtin.os.tag == .windows) {
         \\        _ = try (std.net.StreamServer.init(.{})).accept();
         \\    } else {
         \\        @compileError("Unsupported OS");

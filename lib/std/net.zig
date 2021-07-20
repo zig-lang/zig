@@ -11,13 +11,13 @@ const mem = std.mem;
 const os = std.os;
 const fs = std.fs;
 const io = std.io;
-const native_endian = builtin.target.cpu.arch.endian();
+const native_endian = builtin.cpu.arch.endian();
 
 // Windows 10 added support for unix sockets in build 17063, redstone 4 is the
 // first release to support them.
 pub const has_unix_sockets = @hasDecl(os, "sockaddr_un") and
-    (builtin.target.os.tag != .windows or
-    std.Target.current.os.version_range.windows.isAtLeast(.win10_rs4) orelse false);
+    (builtin.os.tag != .windows or
+    builtin.os.version_range.windows.isAtLeast(.win10_rs4) orelse false);
 
 pub const Address = extern union {
     any: os.sockaddr,
@@ -680,7 +680,7 @@ pub fn tcpConnectToHost(allocator: *mem.Allocator, name: []const u8, port: u16) 
 pub fn tcpConnectToAddress(address: Address) !Stream {
     const nonblock = if (std.io.is_async) os.SOCK_NONBLOCK else 0;
     const sock_flags = os.SOCK_STREAM | nonblock |
-        (if (builtin.target.os.tag == .windows) 0 else os.SOCK_CLOEXEC);
+        (if (builtin.os.tag == .windows) 0 else os.SOCK_CLOEXEC);
     const sockfd = try os.socket(address.any.family, sock_flags, os.IPPROTO_TCP);
     errdefer os.closeSocket(sockfd);
 
@@ -711,14 +711,14 @@ pub fn getAddressList(allocator: *mem.Allocator, name: []const u8, port: u16) !*
     const arena = &result.arena.allocator;
     errdefer result.arena.deinit();
 
-    if (builtin.target.os.tag == .windows or builtin.link_libc) {
+    if (builtin.os.tag == .windows or builtin.link_libc) {
         const name_c = try std.cstr.addNullByte(allocator, name);
         defer allocator.free(name_c);
 
         const port_c = try std.fmt.allocPrint(allocator, "{}\x00", .{port});
         defer allocator.free(port_c);
 
-        const sys = if (builtin.target.os.tag == .windows) os.windows.ws2_32 else os.system;
+        const sys = if (builtin.os.tag == .windows) os.windows.ws2_32 else os.system;
         const hints = os.addrinfo{
             .flags = sys.AI_NUMERICSERV,
             .family = os.AF_UNSPEC,
@@ -731,7 +731,7 @@ pub fn getAddressList(allocator: *mem.Allocator, name: []const u8, port: u16) !*
         };
         var res: *os.addrinfo = undefined;
         const rc = sys.getaddrinfo(name_c.ptr, std.meta.assumeSentinel(port_c.ptr, 0), &hints, &res);
-        if (builtin.target.os.tag == .windows) switch (@intToEnum(os.windows.ws2_32.WinsockError, @intCast(u16, rc))) {
+        if (builtin.os.tag == .windows) switch (@intToEnum(os.windows.ws2_32.WinsockError, @intCast(u16, rc))) {
             @intToEnum(os.windows.ws2_32.WinsockError, 0) => {},
             .WSATRY_AGAIN => return error.TemporaryNameServerFailure,
             .WSANO_RECOVERY => return error.NameServerFailure,
@@ -789,7 +789,7 @@ pub fn getAddressList(allocator: *mem.Allocator, name: []const u8, port: u16) !*
 
         return result;
     }
-    if (builtin.target.os.tag == .linux) {
+    if (builtin.os.tag == .linux) {
         const flags = std.c.AI_NUMERICSERV;
         const family = os.AF_UNSPEC;
         var lookup_addrs = std.ArrayList(LookupAddr).init(allocator);
@@ -1618,7 +1618,7 @@ pub const Stream = struct {
     }
 
     pub fn read(self: Stream, buffer: []u8) ReadError!usize {
-        if (std.Target.current.os.tag == .windows) {
+        if (builtin.os.tag == .windows) {
             return os.windows.ReadFile(self.handle, buffer, null, io.default_mode);
         }
 
@@ -1633,7 +1633,7 @@ pub const Stream = struct {
     /// file system thread instead of non-blocking. It needs to be reworked to properly
     /// use non-blocking I/O.
     pub fn write(self: Stream, buffer: []const u8) WriteError!usize {
-        if (std.Target.current.os.tag == .windows) {
+        if (builtin.os.tag == .windows) {
             return os.windows.WriteFile(self.handle, buffer, null, io.default_mode);
         }
 

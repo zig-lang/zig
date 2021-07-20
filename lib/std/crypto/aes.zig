@@ -6,14 +6,14 @@
 
 const std = @import("../std.zig");
 const testing = std.testing;
-const builtin = std.builtin;
+const builtin = @import("builtin");
 
-const has_aesni = std.Target.x86.featureSetHas(std.Target.current.cpu.features, .aes);
-const has_avx = std.Target.x86.featureSetHas(std.Target.current.cpu.features, .avx);
-const has_armaes = std.Target.aarch64.featureSetHas(std.Target.current.cpu.features, .aes);
-const impl = if (std.Target.current.cpu.arch == .x86_64 and has_aesni and has_avx) impl: {
+const has_aesni = std.Target.x86.featureSetHas(builtin.cpu.features, .aes);
+const has_avx = std.Target.x86.featureSetHas(builtin.cpu.features, .avx);
+const has_armaes = std.Target.aarch64.featureSetHas(builtin.cpu.features, .aes);
+const impl = if (builtin.cpu.arch == .x86_64 and has_aesni and has_avx) impl: {
     break :impl @import("aes/aesni.zig");
-} else if (std.Target.current.cpu.arch == .aarch64 and has_armaes)
+} else if (builtin.cpu.arch == .aarch64 and has_armaes)
 impl: {
     break :impl @import("aes/armcrypto.zig");
 } else impl: {
@@ -47,7 +47,7 @@ test "ctr" {
 
     var out: [exp_out.len]u8 = undefined;
     var ctx = Aes128.initEnc(key);
-    ctr(AesEncryptCtx(Aes128), ctx, out[0..], in[0..], iv, builtin.Endian.Big);
+    ctr(AesEncryptCtx(Aes128), ctx, out[0..], in[0..], iv, std.builtin.Endian.Big);
     try testing.expectEqualSlices(u8, exp_out[0..], out[0..]);
 }
 

@@ -1,5 +1,5 @@
 const std = @import("std");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const io = std.io;
 const fs = std.fs;
 const process = std.process;
@@ -281,7 +281,7 @@ const Code = struct {
     name: []const u8,
     source_token: Token,
     is_inline: bool,
-    mode: builtin.Mode,
+    mode: std.builtin.Mode,
     link_objects: []const []const u8,
     target_str: ?[]const u8,
     link_libc: bool,
@@ -531,7 +531,7 @@ fn genToc(allocator: *Allocator, tokenizer: *Tokenizer) !Toc {
                         return parseError(tokenizer, code_kind_tok, "unrecognized code kind: {s}", .{code_kind_str});
                     }
 
-                    var mode: builtin.Mode = .Debug;
+                    var mode: std.builtin.Mode = .Debug;
                     var link_objects = std.ArrayList([]const u8).init(allocator);
                     defer link_objects.deinit();
                     var target_str: ?[]const u8 = null;
@@ -1191,7 +1191,7 @@ fn genHtml(
                             if (mem.startsWith(u8, triple, "wasm32") or
                                 mem.startsWith(u8, triple, "riscv64-linux") or
                                 (mem.startsWith(u8, triple, "x86_64-linux") and
-                                std.Target.current.os.tag != .linux or std.Target.current.cpu.arch != .x86_64))
+                                builtin.os.tag != .linux or builtin.cpu.arch != .x86_64))
                             {
                                 // skip execution
                                 try out.print("</code></pre>\n", .{});
@@ -1467,7 +1467,7 @@ fn genHtml(
                     Code.Id.Lib => {
                         const bin_basename = try std.zig.binNameAlloc(allocator, .{
                             .root_name = code.name,
-                            .target = std.Target.current,
+                            .target = builtin.target,
                             .output_mode = .Lib,
                         });
 

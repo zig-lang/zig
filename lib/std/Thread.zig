@@ -9,9 +9,9 @@
 //! both evented I/O and async I/O, see the respective names in the top level std namespace.
 
 const std = @import("std.zig");
+const builtin = @import("builtin");
 const os = std.os;
 const assert = std.debug.assert;
-const target = std.Target.current;
 const Atomic = std.atomic.Atomic;
 
 pub const AutoResetEvent = @import("Thread/AutoResetEvent.zig");
@@ -24,14 +24,14 @@ pub const Condition = @import("Thread/Condition.zig");
 
 pub const spinLoopHint = @compileError("deprecated: use std.atomic.spinLoopHint");
 
-pub const use_pthreads = target.os.tag != .windows and std.builtin.link_libc;
+pub const use_pthreads = builtin.os.tag != .windows and builtin.link_libc;
 
 const Thread = @This();
-const Impl = if (target.os.tag == .windows)
+const Impl = if (builtin.os.tag == .windows)
     WindowsThreadImpl
 else if (use_pthreads)
     PosixThreadImpl
-else if (target.os.tag == .linux)
+else if (builtin.os.tag == .linux)
     LinuxThreadImpl
 else
     UnsupportedImpl;
@@ -102,7 +102,7 @@ pub const SpawnError = error{
 /// The caller must eventually either call `join()` to wait for the thread to finish and free its resources
 /// or call `detach()` to excuse the caller from calling `join()` and have the thread clean up its resources on completion`.
 pub fn spawn(config: SpawnConfig, comptime function: anytype, args: anytype) SpawnError!Thread {
-    if (std.builtin.single_threaded) {
+    if (builtin.single_threaded) {
         @compileError("Cannot spawn thread when building in single-threaded mode");
     }
 
@@ -220,7 +220,7 @@ const UnsupportedImpl = struct {
     }
 
     fn unsupported(unusued: anytype) noreturn {
-        @compileLog("Unsupported operating system", target.os.tag);
+        @compileLog("Unsupported operating system", builtin.os.tag);
         _ = unusued;
         unreachable;
     }
@@ -335,7 +335,7 @@ const PosixThreadImpl = struct {
     pub const ThreadHandle = c.pthread_t;
 
     fn getCurrentId() Id {
-        switch (target.os.tag) {
+        switch (builtin.os.tag) {
             .linux => {
                 return LinuxThreadImpl.getCurrentId();
             },
@@ -367,7 +367,7 @@ const PosixThreadImpl = struct {
     }
 
     fn getCpuCount() !usize {
-        switch (target.os.tag) {
+        switch (builtin.os.tag) {
             .linux => {
                 return LinuxThreadImpl.getCpuCount();
             },
@@ -391,7 +391,7 @@ const PosixThreadImpl = struct {
             else => {
                 var count: c_int = undefined;
                 var count_len: usize = @sizeOf(c_int);
-                const name = if (comptime target.isDarwin()) "hw.logicalcpu" else "hw.ncpu";
+                const name = if (comptime builtin.target.isDarwin()) "hw.logicalcpu" else "hw.ncpu";
                 os.sysctlbynameZ(name, &count, &count_len, null, 0) catch |err| switch (err) {
                     error.NameTooLong, error.UnknownName => unreachable,
                     else => |e| return e,
@@ -505,7 +505,7 @@ const LinuxThreadImpl = struct {
         /// Ported over from musl libc's pthread detached implementation:
         /// https://github.com/ifduyue/musl/search?q=__unmapself
         fn freeAndExit(self: *ThreadCompletion) noreturn {
-            const unmap_and_exit: []const u8 = switch (target.cpu.arch) {
+            const unmap_and_exit: []const u8 = switch (builtin.cpu.arch) {
                 .i386 => (
                     \\  movl $91, %%eax
                     \\  movl %[ptr], %%ebx
@@ -667,8 +667,8 @@ const LinuxThreadImpl = struct {
 
         // Prepare the TLS segment and prepare a user_desc struct when needed on i386
         var tls_ptr = os.linux.tls.prepareTLS(mapped[tls_offset..]);
-        var user_desc: if (target.cpu.arch == .i386) os.linux.user_desc else void = undefined;
-        if (target.cpu.arch == .i386) {
+        var user_desc: if (builtin.cpu.arch == .i386) os.linux.user_desc else void = undefined;
+        if (builtin.cpu.arch == .i386) {
             defer tls_ptr = @ptrToInt(&user_desc);
             user_desc = .{
                 .entry_number = os.linux.tls.tls_image.gdt_entry_number,
@@ -774,7 +774,7 @@ fn testIncrementNotify(value: *usize, event: *ResetEvent) void {
 }
 
 test "Thread.join" {
-    if (std.builtin.single_threaded) return error.SkipZigTest;
+    if (builtin.single_threaded) return error.SkipZigTest;
 
     var value: usize = 0;
     var event: ResetEvent = undefined;
@@ -788,7 +788,7 @@ test "Thread.join" {
 }
 
 test "Thread.detach" {
-    if (std.builtin.single_threaded) return error.SkipZigTest;
+    if (builtin.single_threaded) return error.SkipZigTest;
 
     var value: usize = 0;
     var event: ResetEvent = undefined;

@@ -4,6 +4,7 @@ hash: HashHelper = .{},
 
 const Cache = @This();
 const std = @import("std");
+const builtin = @import("builtin");
 const crypto = std.crypto;
 const fs = std.fs;
 const assert = std.debug.assert;
@@ -713,7 +714,7 @@ pub const Manifest = struct {
 /// uses the file contents. Windows supports symlinks but only with elevated privileges, so
 /// it is treated as not supporting symlinks.
 pub fn readSmallFile(dir: fs.Dir, sub_path: []const u8, buffer: []u8) ![]u8 {
-    if (std.Target.current.os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         return dir.readFile(sub_path, buffer);
     } else {
         return dir.readLink(sub_path, buffer);
@@ -726,7 +727,7 @@ pub fn readSmallFile(dir: fs.Dir, sub_path: []const u8, buffer: []u8) ![]u8 {
 /// `data` must be a valid UTF-8 encoded file path and 255 bytes or fewer.
 pub fn writeSmallFile(dir: fs.Dir, sub_path: []const u8, data: []const u8) !void {
     assert(data.len <= 255);
-    if (std.Target.current.os.tag == .windows) {
+    if (builtin.os.tag == .windows) {
         return dir.writeFile(sub_path, data);
     } else {
         return dir.symLink(data, sub_path, .{});
@@ -778,7 +779,7 @@ fn isProblematicTimestamp(fs_clock: i128) bool {
 }
 
 test "cache file and then recall it" {
-    if (std.Target.current.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi) {
         // https://github.com/ziglang/zig/issues/5437
         return error.SkipZigTest;
     }
@@ -856,7 +857,7 @@ test "give nonproblematic timestamp" {
 }
 
 test "check that changing a file makes cache fail" {
-    if (std.Target.current.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi) {
         // https://github.com/ziglang/zig/issues/5437
         return error.SkipZigTest;
     }
@@ -932,7 +933,7 @@ test "check that changing a file makes cache fail" {
 }
 
 test "no file inputs" {
-    if (std.Target.current.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi) {
         // https://github.com/ziglang/zig/issues/5437
         return error.SkipZigTest;
     }
@@ -977,7 +978,7 @@ test "no file inputs" {
 }
 
 test "Manifest with files added after initial hash work" {
-    if (std.Target.current.os.tag == .wasi) {
+    if (builtin.os.tag == .wasi) {
         // https://github.com/ziglang/zig/issues/5437
         return error.SkipZigTest;
     }

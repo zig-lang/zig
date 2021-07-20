@@ -10,10 +10,11 @@
 //! Using Futex, other Thread synchronization primitives can be built which efficiently wait for cross-thread events or signals.  
 
 const std = @import("../std.zig");
+const builtin = @import("builtin");
 const Futex = @This();
 
-const target = std.Target.current;
-const single_threaded = std.builtin.single_threaded;
+const target = builtin.target;
+const single_threaded = builtin.single_threaded;
 
 const assert = std.debug.assert;
 const testing = std.testing;
@@ -76,7 +77,7 @@ else if (target.os.tag == .linux)
     LinuxFutex
 else if (target.isDarwin())
     DarwinFutex
-else if (std.builtin.link_libc)
+else if (builtin.link_libc)
     PosixFutex
 else
     UnsupportedFutex;

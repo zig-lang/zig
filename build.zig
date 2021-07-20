@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = std.builtin;
 const Builder = std.build.Builder;
 const tests = @import("test/tests.zig");
 const BufMap = std.BufMap;
@@ -263,22 +262,22 @@ pub fn build(b: *Builder) !void {
         toolchain_step.dependOn(test_stage2_step);
     }
 
-    var chosen_modes: [4]builtin.Mode = undefined;
+    var chosen_modes: [4]std.builtin.Mode = undefined;
     var chosen_mode_index: usize = 0;
     if (!skip_debug) {
-        chosen_modes[chosen_mode_index] = builtin.Mode.Debug;
+        chosen_modes[chosen_mode_index] = std.builtin.Mode.Debug;
         chosen_mode_index += 1;
     }
     if (!skip_release_safe) {
-        chosen_modes[chosen_mode_index] = builtin.Mode.ReleaseSafe;
+        chosen_modes[chosen_mode_index] = std.builtin.Mode.ReleaseSafe;
         chosen_mode_index += 1;
     }
     if (!skip_release_fast) {
-        chosen_modes[chosen_mode_index] = builtin.Mode.ReleaseFast;
+        chosen_modes[chosen_mode_index] = std.builtin.Mode.ReleaseFast;
         chosen_mode_index += 1;
     }
     if (!skip_release_small) {
-        chosen_modes[chosen_mode_index] = builtin.Mode.ReleaseSmall;
+        chosen_modes[chosen_mode_index] = std.builtin.Mode.ReleaseSmall;
         chosen_mode_index += 1;
     }
     const modes = chosen_modes[0..chosen_mode_index];

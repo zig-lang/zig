@@ -3,7 +3,7 @@ const std = @import("std");
 const json = std.json;
 const mem = std.mem;
 const fieldIndex = std.meta.fieldIndex;
-const TypeId = builtin.TypeId;
+const TypeId = std.builtin.TypeId;
 
 pub fn main() anyerror!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

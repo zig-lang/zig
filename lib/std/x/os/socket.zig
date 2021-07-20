@@ -12,8 +12,9 @@ const fmt = std.fmt;
 const mem = std.mem;
 const time = std.time;
 const meta = std.meta;
-const native_os = std.Target.current.os;
-const native_endian = std.Target.current.cpu.arch.endian();
+const native_target = @import("builtin").target;
+const native_os = native_target.os;
+const native_endian = native_target.cpu.arch.endian();
 
 const Buffer = std.x.os.Buffer;
 

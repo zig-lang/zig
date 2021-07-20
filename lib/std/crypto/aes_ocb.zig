@@ -5,6 +5,7 @@
 // and substantial portions of the software.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const crypto = std.crypto;
 const aes = crypto.core.aes;
 const assert = std.debug.assert;
@@ -106,9 +107,9 @@ fn AesOcb(comptime Aes: anytype) type {
             return offset;
         }
 
-        const has_aesni = std.Target.x86.featureSetHas(std.Target.current.cpu.features, .aes);
-        const has_armaes = std.Target.aarch64.featureSetHas(std.Target.current.cpu.features, .aes);
-        const wb: usize = if ((std.Target.current.cpu.arch == .x86_64 and has_aesni) or (std.Target.current.cpu.arch == .aarch64 and has_armaes)) 4 else 0;
+        const has_aesni = std.Target.x86.featureSetHas(builtin.cpu.features, .aes);
+        const has_armaes = std.Target.aarch64.featureSetHas(builtin.cpu.features, .aes);
+        const wb: usize = if ((builtin.cpu.arch == .x86_64 and has_aesni) or (builtin.cpu.arch == .aarch64 and has_armaes)) 4 else 0;
 
         /// c: ciphertext: output buffer should be of size m.len
         /// tag: authentication tag: output MAC

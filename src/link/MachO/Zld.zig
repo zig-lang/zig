@@ -1,6 +1,7 @@
 const Zld = @This();
 
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const leb = std.leb;
 const mem = std.mem;
@@ -220,7 +221,7 @@ pub fn link(self: *Zld, files: []const []const u8, output: Output, args: LinkArg
     self.file = try fs.cwd().createFile(self.output.?.path, .{
         .truncate = true,
         .read = true,
-        .mode = if (std.Target.current.os.tag == .windows) 0 else 0o777,
+        .mode = if (builtin.os.tag == .windows) 0 else 0o777,
     });
 
     try self.populateMetadata();
@@ -2389,7 +2390,7 @@ fn flush(self: *Zld) !void {
         try self.writeCodeSignature();
     }
 
-    if (comptime std.Target.current.isDarwin() and std.Target.current.cpu.arch == .aarch64) {
+    if (comptime builtin.target.isDarwin() and builtin.cpu.arch == .aarch64) {
         const out_path = self.output.?.path;
         try fs.cwd().copyFile(out_path, fs.cwd(), out_path, .{});
     }

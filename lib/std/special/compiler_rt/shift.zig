@@ -5,7 +5,7 @@
 // and substantial portions of the software.
 const std = @import("std");
 const Log2Int = std.math.Log2Int;
-const native_endian = std.Target.current.cpu.arch.endian();
+const native_endian = @import("builtin").cpu.arch.endian();
 
 fn Dwords(comptime T: type, comptime signed_half: bool) type {
     return extern union {

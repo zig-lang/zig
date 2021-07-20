@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const tests = @import("tests.zig");
 
 pub fn addCases(cases: *tests.StandaloneContext) void {
@@ -25,16 +26,16 @@ pub fn addCases(cases: *tests.StandaloneContext) void {
     cases.addBuildFile("test/standalone/brace_expansion/build.zig", .{});
     cases.addBuildFile("test/standalone/empty_env/build.zig", .{});
     cases.addBuildFile("test/standalone/issue_7030/build.zig", .{});
-    if (std.Target.current.os.tag != .wasi) {
+    if (builtin.os.tag != .wasi) {
         cases.addBuildFile("test/standalone/load_dynamic_library/build.zig", .{});
     }
-    if (std.Target.current.cpu.arch == .x86_64) { // TODO add C ABI support for other architectures
+    if (builtin.cpu.arch == .x86_64) { // TODO add C ABI support for other architectures
         cases.addBuildFile("test/stage1/c_abi/build.zig", .{});
     }
     cases.addBuildFile("test/standalone/c_compiler/build.zig", .{ .build_modes = true, .cross_targets = true });
 
     // Try to build and run a PIE executable.
-    if (std.Target.current.os.tag == .linux) {
+    if (builtin.os.tag == .linux) {
         cases.addBuildFile("test/standalone/pie/build.zig", .{});
     }
 

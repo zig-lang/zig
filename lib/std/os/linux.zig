@@ -16,7 +16,8 @@ const maxInt = std.math.maxInt;
 const elf = std.elf;
 const vdso = @import("linux/vdso.zig");
 const dl = @import("../dynamic_library.zig");
-const native_arch = std.Target.current.cpu.arch;
+const builtin = @import("builtin");
+const native_arch = builtin.cpu.arch;
 const native_endian = native_arch.endian();
 
 pub usingnamespace switch (native_arch) {
@@ -55,10 +56,10 @@ pub fn getauxval(index: usize) usize {
 // Some architectures (and some syscalls) require 64bit parameters to be passed
 // in a even-aligned register pair.
 const require_aligned_register_pair =
-    std.Target.current.cpu.arch.isPPC() or
-    std.Target.current.cpu.arch.isMIPS() or
-    std.Target.current.cpu.arch.isARM() or
-    std.Target.current.cpu.arch.isThumb();
+    native_arch.isPPC() or
+    native_arch.isMIPS() or
+    native_arch.isARM() or
+    native_arch.isThumb();
 
 // Split a 64bit value into a {LSB,MSB} pair.
 // The LE/BE variants specify the endianness to assume.
@@ -1465,7 +1466,7 @@ pub fn process_vm_writev(pid: pid_t, local: [*]const iovec, local_count: usize, 
 }
 
 pub fn fadvise(fd: fd_t, offset: i64, len: i64, advice: usize) usize {
-    if (comptime std.Target.current.cpu.arch.isMIPS()) {
+    if (comptime native_arch.isMIPS()) {
         // MIPS requires a 7 argument syscall
 
         const offset_halves = splitValue64(offset);
@@ -1481,7 +1482,7 @@ pub fn fadvise(fd: fd_t, offset: i64, len: i64, advice: usize) usize {
             length_halves[1],
             advice,
         );
-    } else if (comptime std.Target.current.cpu.arch.isARM()) {
+    } else if (comptime native_arch.isARM()) {
         // ARM reorders the arguments
 
         const offset_halves = splitValue64(offset);
@@ -1524,7 +1525,7 @@ pub fn fadvise(fd: fd_t, offset: i64, len: i64, advice: usize) usize {
 }
 
 test {
-    if (std.Target.current.os.tag == .linux) {
+    if (builtin.os.tag == .linux) {
         _ = @import("linux/test.zig");
     }
 }

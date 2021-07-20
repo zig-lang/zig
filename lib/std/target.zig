@@ -991,7 +991,7 @@ pub const Target = struct {
                 };
             }
 
-            pub fn endian(arch: Arch) builtin.Endian {
+            pub fn endian(arch: Arch) std.builtin.Endian {
                 return switch (arch) {
                     .avr,
                     .arm,
@@ -1273,8 +1273,6 @@ pub const Target = struct {
             return Model.baseline(arch).toCpu(arch);
         }
     };
-
-    pub const current = builtin.target;
 
     pub const stack_align = 16;
 

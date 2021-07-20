@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const expect = std.testing.expect;
 
 test "@byteSwap integers" {
@@ -40,7 +41,7 @@ test "@byteSwap integers" {
 
 test "@byteSwap vectors" {
     // https://github.com/ziglang/zig/issues/3317
-    if (std.Target.current.cpu.arch == .mipsel or std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
+    if (builtin.cpu.arch == .mipsel or builtin.cpu.arch == .mips) return error.SkipZigTest;
 
     const ByteSwapVectorTest = struct {
         fn run() !void {

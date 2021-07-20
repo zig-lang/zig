@@ -5,6 +5,7 @@
 // and substantial portions of the software.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const crypto = std.crypto;
 const debug = std.debug;
 const math = std.math;
@@ -310,7 +311,7 @@ const Salsa20NonVecImpl = struct {
     }
 };
 
-const Salsa20Impl = if (std.Target.current.cpu.arch == .x86_64) Salsa20VecImpl else Salsa20NonVecImpl;
+const Salsa20Impl = if (builtin.cpu.arch == .x86_64) Salsa20VecImpl else Salsa20NonVecImpl;
 
 fn keyToWords(key: [32]u8) [8]u32 {
     var k: [8]u32 = undefined;

@@ -4,7 +4,7 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("std.zig");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const os = std.os;
 const fs = std.fs;
 const BufMap = std.BufMap;
@@ -867,9 +867,9 @@ pub fn execve(
         if (env_map) |m| {
             const envp_buf = try child_process.createNullDelimitedEnvMap(arena, m);
             break :m envp_buf.ptr;
-        } else if (std.builtin.link_libc) {
+        } else if (builtin.link_libc) {
             break :m std.c.environ;
-        } else if (std.builtin.output_mode == .Exe) {
+        } else if (builtin.output_mode == .Exe) {
             // Then we have Zig start code and this works.
             // TODO type-safety for null-termination of `os.environ`.
             break :m @ptrCast([*:null]?[*:0]u8, os.environ.ptr);

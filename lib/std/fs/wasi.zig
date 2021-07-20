@@ -4,6 +4,7 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("std");
+const builtin = @import("builtin");
 const os = std.os;
 const mem = std.mem;
 const math = std.math;
@@ -169,7 +170,7 @@ pub const PreopenList = struct {
 };
 
 test "extracting WASI preopens" {
-    if (std.builtin.os.tag != .wasi) return error.SkipZigTest;
+    if (builtin.os.tag != .wasi) return error.SkipZigTest;
 
     var preopens = PreopenList.init(std.testing.allocator);
     defer preopens.deinit();

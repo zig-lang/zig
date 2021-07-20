@@ -131,7 +131,7 @@ fn norm_zero_case(random: *Random, u: f64) f64 {
     }
 }
 
-const please_windows_dont_oom = std.Target.current.os.tag == .windows;
+const please_windows_dont_oom = @import("builtin").target.os.tag == .windows;
 
 test "normal dist sanity" {
     if (please_windows_dont_oom) return error.SkipZigTest;

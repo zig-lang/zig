@@ -2299,7 +2299,7 @@ test "variable alignment" {
     const align_of_i32 = @alignOf(@TypeOf(x));
     try expect(@TypeOf(&x) == *i32);
     try expect(*i32 == *align(align_of_i32) i32);
-    if (std.Target.current.cpu.arch == .x86_64) {
+    if (@import("builtin").cpu.arch == .x86_64) {
         try expect(@typeInfo(*i32).Pointer.alignment == 4);
     }
 }
@@ -3529,7 +3529,7 @@ test "switch simple" {
 }
 
 // Switch expressions can be used outside a function:
-const os_msg = switch (std.Target.current.os.tag) {
+const os_msg = switch (@import("builtin").os.tag) {
     .linux => "we found a linux user",
     else => "not a linux user",
 };
@@ -3537,7 +3537,7 @@ const os_msg = switch (std.Target.current.os.tag) {
 // Inside a function, switch statements implicitly are compile-time
 // evaluated if the target expression is compile-time known.
 test "switch inside function" {
-    switch (std.Target.current.os.tag) {
+    switch (@import("builtin").os.tag) {
         .fuchsia => {
             // On an OS other than fuchsia, block is not even analyzed,
             // so this compile error is not triggered.
@@ -5310,7 +5310,7 @@ test "implicit unsigned integer to signed integer" {
 test "float widening" {
     // Note: there is an open issue preventing this from working on aarch64:
     // https://github.com/ziglang/zig/issues/3282
-    if (std.Target.current.cpu.arch == .aarch64) return error.SkipZigTest;
+    if (@import("builtin").cpu.arch == .aarch64) return error.SkipZigTest;
 
     var a: f16 = 12.34;
     var b: f32 = a;
@@ -7081,7 +7081,7 @@ fn func(y: *i32) void {
       {#header_close#}
 
       {#header_open|@atomicLoad#}
-      <pre>{#syntax#}@atomicLoad(comptime T: type, ptr: *const T, comptime ordering: builtin.AtomicOrder) T{#endsyntax#}</pre>
+      <pre>{#syntax#}@atomicLoad(comptime T: type, ptr: *const T, comptime ordering: std.builtin.AtomicOrder) T{#endsyntax#}</pre>
       <p>
       This builtin function atomically dereferences a pointer and returns the value.
       </p>
@@ -7091,7 +7091,7 @@ fn func(y: *i32) void {
       </p>
       {#header_close#}
       {#header_open|@atomicRmw#}
-      <pre>{#syntax#}@atomicRmw(comptime T: type, ptr: *T, comptime op: builtin.AtomicRmwOp, operand: T, comptime ordering: builtin.AtomicOrder) T{#endsyntax#}</pre>
+      <pre>{#syntax#}@atomicRmw(comptime T: type, ptr: *T, comptime op: std.builtin.AtomicRmwOp, operand: T, comptime ordering: std.builtin.AtomicOrder) T{#endsyntax#}</pre>
       <p>
       This builtin function atomically modifies memory and then returns the previous value.
       </p>
@@ -7117,7 +7117,7 @@ fn func(y: *i32) void {
       </ul>
       {#header_close#}
       {#header_open|@atomicStore#}
-      <pre>{#syntax#}@atomicStore(comptime T: type, ptr: *T, value: T, comptime ordering: builtin.AtomicOrder) void{#endsyntax#}</pre>
+      <pre>{#syntax#}@atomicStore(comptime T: type, ptr: *T, value: T, comptime ordering: std.builtin.AtomicOrder) void{#endsyntax#}</pre>
       <p>
       This builtin function atomically stores a value.
       </p>
@@ -9784,7 +9784,7 @@ test "string literal to constant slice" {
       </p>
       {#code_begin|syntax#}
 const builtin = @import("builtin");
-const separator = if (builtin.os.tag == builtin.Os.windows) '\\' else '/';
+const separator = if (builtin.os.tag == std.builtin.Os.windows) '\\' else '/';
       {#code_end#}
       <p>
       Example of what is imported with {#syntax#}@import("builtin"){#endsyntax#}:
@@ -9948,7 +9948,7 @@ pub fn main() void {
 const builtin = @import("builtin");
 
 const c = @cImport({
-    @cDefine("NDEBUG", builtin.mode == .ReleaseFast);
+    @cDefine("NDEBUG", @import("builtin").mode == .ReleaseFast);
     if (something) {
         @cDefine("_GNU_SOURCE", {});
     }

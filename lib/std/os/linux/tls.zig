@@ -9,7 +9,7 @@ const mem = std.mem;
 const elf = std.elf;
 const math = std.math;
 const assert = std.debug.assert;
-const native_arch = std.Target.current.cpu.arch;
+const native_arch = @import("builtin").cpu.arch;
 
 // This file implements the two TLS variants [1] used by ELF-based systems.
 //

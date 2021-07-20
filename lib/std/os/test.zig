@@ -21,7 +21,7 @@ const a = std.testing.allocator;
 const builtin = @import("builtin");
 const AtomicRmwOp = std.builtin.AtomicRmwOp;
 const AtomicOrder = std.builtin.AtomicOrder;
-const native_os = builtin.target.os.tag;
+const native_os = builtin.os.tag;
 const tmpDir = std.testing.tmpDir;
 const Dir = std.fs.Dir;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -718,7 +718,7 @@ test "sigaction" {
         return error.SkipZigTest;
 
     // https://github.com/ziglang/zig/issues/7427
-    if (native_os == .linux and builtin.target.cpu.arch == .i386)
+    if (native_os == .linux and builtin.cpu.arch == .i386)
         return error.SkipZigTest;
 
     const S = struct {

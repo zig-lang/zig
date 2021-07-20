@@ -7,6 +7,7 @@
 // Adapted from BearSSL's ctmul64 implementation originally written by Thomas Pornin <pornin@bolet.org>
 
 const std = @import("../std.zig");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const math = std.math;
 const mem = std.mem;
@@ -50,7 +51,7 @@ pub const Ghash = struct {
         const h2 = h0 ^ h1;
         const h2r = h0r ^ h1r;
 
-        if (std.builtin.mode == .ReleaseSmall) {
+        if (builtin.mode == .ReleaseSmall) {
             return Ghash{
                 .h0 = h0,
                 .h1 = h1,
@@ -137,12 +138,12 @@ pub const Ghash = struct {
         return z0 | z1 | z2 | z3;
     }
 
-    const has_pclmul = std.Target.x86.featureSetHas(std.Target.current.cpu.features, .pclmul);
-    const has_avx = std.Target.x86.featureSetHas(std.Target.current.cpu.features, .avx);
-    const has_armaes = std.Target.aarch64.featureSetHas(std.Target.current.cpu.features, .aes);
-    const clmul = if (std.Target.current.cpu.arch == .x86_64 and has_pclmul and has_avx) impl: {
+    const has_pclmul = std.Target.x86.featureSetHas(builtin.cpu.features, .pclmul);
+    const has_avx = std.Target.x86.featureSetHas(builtin.cpu.features, .avx);
+    const has_armaes = std.Target.aarch64.featureSetHas(builtin.cpu.features, .aes);
+    const clmul = if (builtin.cpu.arch == .x86_64 and has_pclmul and has_avx) impl: {
         break :impl clmul_pclmul;
-    } else if (std.Target.current.cpu.arch == .aarch64 and has_armaes) impl: {
+    } else if (builtin.cpu.arch == .aarch64 and has_armaes) impl: {
         break :impl clmul_pmull;
     } else impl: {
         break :impl clmul_soft;
@@ -156,7 +157,7 @@ pub const Ghash = struct {
         var i: usize = 0;
 
         // 2-blocks aggregated reduction
-        if (std.builtin.mode != .ReleaseSmall) {
+        if (builtin.mode != .ReleaseSmall) {
             while (i + 32 <= msg.len) : (i += 32) {
                 // B0 * H^2 unreduced
                 y1 ^= mem.readIntBig(u64, msg[i..][0..8]);

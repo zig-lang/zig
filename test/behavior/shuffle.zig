@@ -36,7 +36,7 @@ test "@shuffle" {
 
             // bool
             // https://github.com/ziglang/zig/issues/3317
-            if (builtin.target.cpu.arch != .mipsel and builtin.target.cpu.arch != .mips) {
+            if (builtin.cpu.arch != .mipsel and builtin.cpu.arch != .mips) {
                 var x2: Vector(4, bool) = [4]bool{ false, true, false, true };
                 var v4: Vector(2, bool) = [2]bool{ true, false };
                 const mask5: Vector(4, i32) = [4]i32{ 0, ~@as(i32, 1), 1, 2 };

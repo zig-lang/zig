@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const maxInt = std.math.maxInt;
-const native_endian = builtin.target.cpu.arch.endian();
+const native_endian = builtin.cpu.arch.endian();
 
 test "@bitCast i32 -> u32" {
     try testBitCast_i32_u32();

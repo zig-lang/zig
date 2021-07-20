@@ -4,7 +4,7 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const root = @import("root");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const std = @import("std.zig");
 const os = std.os;
 const mem = std.mem;
@@ -14,7 +14,7 @@ const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 const math = std.math;
 
-const is_darwin = std.Target.current.os.tag.isDarwin();
+const is_darwin = builtin.os.tag.isDarwin();
 
 pub const path = @import("fs/path.zig");
 pub const File = @import("fs/file.zig").File;
@@ -2538,7 +2538,7 @@ const CopyFileError = error{SystemResources} || os.CopyFileRangeError || os.Send
 // The copy starts at offset 0, the initial offsets are preserved.
 // No metadata is transferred over.
 fn copy_file(fd_in: os.fd_t, fd_out: os.fd_t) CopyFileError!void {
-    if (comptime std.Target.current.isDarwin()) {
+    if (comptime builtin.target.isDarwin()) {
         const rc = os.system.fcopyfile(fd_in, fd_out, null, os.system.COPYFILE_DATA);
         switch (os.errno(rc)) {
             0 => return,
@@ -2551,7 +2551,7 @@ fn copy_file(fd_in: os.fd_t, fd_out: os.fd_t) CopyFileError!void {
         }
     }
 
-    if (std.Target.current.os.tag == .linux) {
+    if (builtin.os.tag == .linux) {
         // Try copy_file_range first as that works at the FS level and is the
         // most efficient method (if available).
         var offset: u64 = 0;

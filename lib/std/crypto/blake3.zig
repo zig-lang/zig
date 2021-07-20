@@ -7,6 +7,7 @@
 // Source: https://github.com/BLAKE3-team/BLAKE3
 
 const std = @import("../std.zig");
+const builtin = @import("builtin");
 const fmt = std.fmt;
 const math = std.math;
 const mem = std.mem;
@@ -205,7 +206,7 @@ const CompressGeneric = struct {
     }
 };
 
-const compress = if (std.Target.current.cpu.arch == .x86_64) CompressVectorized.compress else CompressGeneric.compress;
+const compress = if (builtin.cpu.arch == .x86_64) CompressVectorized.compress else CompressGeneric.compress;
 
 fn first8Words(words: [16]u32) [8]u32 {
     return @ptrCast(*const [8]u32, &words).*;

@@ -5,12 +5,12 @@
 // and substantial portions of the software.
 const std = @import("std.zig");
 const root = @import("root");
+const builtin = @import("builtin");
 const debug = std.debug;
 const assert = debug.assert;
 const testing = std.testing;
 const mem = std.mem;
 const os = std.os;
-const builtin = std.builtin;
 const c = std.c;
 const maxInt = std.math.maxInt;
 
@@ -214,9 +214,9 @@ fn rawCResize(
 
 /// This allocator makes a syscall directly for every allocation and free.
 /// Thread-safe and lock-free.
-pub const page_allocator = if (std.Target.current.isWasm())
+pub const page_allocator = if (builtin.target.isWasm())
     &wasm_page_allocator_state
-else if (std.Target.current.os.tag == .freestanding)
+else if (builtin.os.tag == .freestanding)
     root.os.heap.page_allocator
 else
     &page_allocator_state;
@@ -407,7 +407,7 @@ const PageAllocator = struct {
 
 const WasmPageAllocator = struct {
     comptime {
-        if (!std.Target.current.isWasm()) {
+        if (!builtin.target.isWasm()) {
             @compileError("WasmPageAllocator is only available for wasm32 arch");
         }
     }
@@ -613,11 +613,11 @@ pub const HeapAllocator = switch (builtin.os.tag) {
             const self = @fieldParentPtr(HeapAllocator, "allocator", allocator);
 
             const amt = n + ptr_align - 1 + @sizeOf(usize);
-            const optional_heap_handle = @atomicLoad(?HeapHandle, &self.heap_handle, builtin.AtomicOrder.SeqCst);
+            const optional_heap_handle = @atomicLoad(?HeapHandle, &self.heap_handle, std.builtin.AtomicOrder.SeqCst);
             const heap_handle = optional_heap_handle orelse blk: {
                 const options = if (builtin.single_threaded) os.windows.HEAP_NO_SERIALIZE else 0;
                 const hh = os.windows.kernel32.HeapCreate(options, amt, 0) orelse return error.OutOfMemory;
-                const other_hh = @cmpxchgStrong(?HeapHandle, &self.heap_handle, null, hh, builtin.AtomicOrder.SeqCst, builtin.AtomicOrder.SeqCst) orelse break :blk hh;
+                const other_hh = @cmpxchgStrong(?HeapHandle, &self.heap_handle, null, hh, std.builtin.AtomicOrder.SeqCst, std.builtin.AtomicOrder.SeqCst) orelse break :blk hh;
                 os.windows.HeapDestroy(hh);
                 break :blk other_hh.?; // can't be null because of the cmpxchg
             };
@@ -797,7 +797,7 @@ pub const ThreadSafeFixedBufferAllocator = blk: {
                 _ = len_align;
                 _ = ra;
                 const self = @fieldParentPtr(ThreadSafeFixedBufferAllocator, "allocator", allocator);
-                var end_index = @atomicLoad(usize, &self.end_index, builtin.AtomicOrder.SeqCst);
+                var end_index = @atomicLoad(usize, &self.end_index, std.builtin.AtomicOrder.SeqCst);
                 while (true) {
                     const adjust_off = mem.alignPointerOffset(self.buffer.ptr + end_index, ptr_align) orelse
                         return error.OutOfMemory;
@@ -806,7 +806,7 @@ pub const ThreadSafeFixedBufferAllocator = blk: {
                     if (new_end_index > self.buffer.len) {
                         return error.OutOfMemory;
                     }
-                    end_index = @cmpxchgWeak(usize, &self.end_index, end_index, new_end_index, builtin.AtomicOrder.SeqCst, builtin.AtomicOrder.SeqCst) orelse return self.buffer[adjusted_index..new_end_index];
+                    end_index = @cmpxchgWeak(usize, &self.end_index, end_index, new_end_index, std.builtin.AtomicOrder.SeqCst, std.builtin.AtomicOrder.SeqCst) orelse return self.buffer[adjusted_index..new_end_index];
                 }
             }
 
@@ -889,7 +889,7 @@ test "raw_c_allocator" {
 }
 
 test "WasmPageAllocator internals" {
-    if (comptime std.Target.current.isWasm()) {
+    if (comptime builtin.target.isWasm()) {
         const conventional_memsize = WasmPageAllocator.conventional.totalPages() * mem.page_size;
         const initial = try page_allocator.alloc(u8, mem.page_size);
         try testing.expect(@ptrToInt(initial.ptr) < conventional_memsize); // If this isn't conventional, the rest of these tests don't make sense. Also we have a serious memory leak in the test suite.
@@ -929,7 +929,7 @@ test "PageAllocator" {
     const allocator = page_allocator;
     try testAllocator(allocator);
     try testAllocatorAligned(allocator);
-    if (!std.Target.current.isWasm()) {
+    if (!builtin.target.isWasm()) {
         try testAllocatorLargeAlignment(allocator);
         try testAllocatorAlignedShrink(allocator);
     }

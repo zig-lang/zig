@@ -5,6 +5,7 @@
 // and substantial portions of the software.
 
 const std = @import("../../std.zig");
+const builtin = @import("builtin");
 const mem = std.mem;
 const debug = std.debug;
 const Vector = std.meta.Vector;
@@ -103,7 +104,7 @@ pub const Block = struct {
         const cpu = std.Target.x86.cpu;
 
         /// The recommended number of AES encryption/decryption to perform in parallel for the chosen implementation.
-        pub const optimal_parallel_blocks = switch (std.Target.current.cpu.model) {
+        pub const optimal_parallel_blocks = switch (builtin.cpu.model) {
             &cpu.westmere => 6,
             &cpu.sandybridge, &cpu.ivybridge => 8,
             &cpu.haswell, &cpu.broadwell => 7,

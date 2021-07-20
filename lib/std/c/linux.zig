@@ -4,10 +4,11 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("../std.zig");
+const builtin = @import("builtin");
 const maxInt = std.math.maxInt;
-const abi = std.Target.current.abi;
-const arch = std.Target.current.cpu.arch;
-const os_tag = std.Target.current.os.tag;
+const abi = builtin.abi;
+const arch = builtin.cpu.arch;
+const os_tag = builtin.os.tag;
 usingnamespace std.c;
 
 pub const _errno = switch (abi) {

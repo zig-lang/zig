@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const expect = std.testing.expect;
-const native_endian = builtin.target.cpu.arch.endian();
+const native_endian = builtin.cpu.arch.endian();
 
 test "reinterpret bytes as integer with nonzero offset" {
     try testReinterpretBytesAsInteger();

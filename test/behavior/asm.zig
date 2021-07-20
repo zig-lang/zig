@@ -1,7 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const expect = std.testing.expect;
 
-const is_x86_64_linux = std.Target.current.cpu.arch == .x86_64 and std.Target.current.os.tag == .linux;
+const is_x86_64_linux = builtin.cpu.arch == .x86_64 and builtin.os.tag == .linux;
 
 comptime {
     if (is_x86_64_linux) {

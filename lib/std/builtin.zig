@@ -5,35 +5,13 @@
 // and substantial portions of the software.
 const builtin = @import("builtin");
 
-// These are all deprecated.
-pub const zig_version = builtin.zig_version;
-pub const zig_is_stage2 = builtin.zig_is_stage2;
-pub const output_mode = builtin.output_mode;
-pub const link_mode = builtin.link_mode;
-pub const is_test = builtin.is_test;
-pub const single_threaded = builtin.single_threaded;
-pub const abi = builtin.abi;
-pub const cpu = builtin.cpu;
-pub const os = builtin.os;
-pub const target = builtin.target;
-pub const object_format = builtin.object_format;
-pub const mode = builtin.mode;
-pub const link_libc = builtin.link_libc;
-pub const link_libcpp = builtin.link_libcpp;
-pub const have_error_return_tracing = builtin.have_error_return_tracing;
-pub const valgrind_support = builtin.valgrind_support;
-pub const position_independent_code = builtin.position_independent_code;
-pub const position_independent_executable = builtin.position_independent_executable;
-pub const strip_debug_info = builtin.strip_debug_info;
-pub const code_model = builtin.code_model;
-
 /// `explicit_subsystem` is missing when the subsystem is automatically detected,
 /// so Zig standard library has the subsystem detection logic here. This should generally be
 /// used rather than `explicit_subsystem`.
 /// On non-Windows targets, this is `null`.
 pub const subsystem: ?std.Target.SubSystem = blk: {
     if (@hasDecl(builtin, "explicit_subsystem")) break :blk explicit_subsystem;
-    switch (os.tag) {
+    switch (builtin.os.tag) {
         .windows => {
             if (is_test) {
                 break :blk std.Target.SubSystem.Console;
@@ -688,7 +666,7 @@ pub fn default_panic(msg: []const u8, error_return_trace: ?*StackTrace) noreturn
         root.os.panic(msg, error_return_trace);
         unreachable;
     }
-    switch (os.tag) {
+    switch (builtin.os.tag) {
         .freestanding => {
             while (true) {
                 @breakpoint();

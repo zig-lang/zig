@@ -1,7 +1,7 @@
 const std = @import("std");
 const expect = std.testing.expect;
 const builtin = @import("builtin");
-const native_arch = builtin.target.cpu.arch;
+const native_arch = builtin.cpu.arch;
 const maxInt = std.math.maxInt;
 
 const Foo = struct {

@@ -15,7 +15,7 @@ const expectError = std.testing.expectError;
 const mem = std.mem;
 const fs = std.fs;
 const File = std.fs.File;
-const native_endian = builtin.target.cpu.arch.endian();
+const native_endian = builtin.cpu.arch.endian();
 
 const tmpDir = std.testing.tmpDir;
 

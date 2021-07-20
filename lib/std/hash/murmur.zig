@@ -6,7 +6,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
-const native_endian = builtin.target.cpu.arch.endian();
+const native_endian = builtin.cpu.arch.endian();
 
 const default_seed: u32 = 0xc70f6907;
 

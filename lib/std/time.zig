@@ -4,12 +4,12 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("std.zig");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const testing = std.testing;
 const os = std.os;
 const math = std.math;
-const is_windows = std.Target.current.os.tag == .windows;
+const is_windows = builtin.os.tag == .windows;
 
 pub const epoch = @import("time/epoch.zig");
 
@@ -178,7 +178,7 @@ pub const Timer = struct {
                 .resolution = @divFloor(ns_per_s, freq),
                 .start_time = os.windows.QueryPerformanceCounter(),
             };
-        } else if (comptime std.Target.current.isDarwin()) {
+        } else if (comptime builtin.target.isDarwin()) {
             var freq: os.darwin.mach_timebase_info_data = undefined;
             os.darwin.mach_timebase_info(&freq);
 
@@ -232,7 +232,7 @@ pub const Timer = struct {
         if (is_windows) {
             return os.windows.QueryPerformanceCounter();
         }
-        if (comptime std.Target.current.isDarwin()) {
+        if (comptime builtin.target.isDarwin()) {
             return os.darwin.mach_absolute_time();
         }
         var ts: os.timespec = undefined;
@@ -244,7 +244,7 @@ pub const Timer = struct {
         if (is_windows) {
             return safeMulDiv(duration, ns_per_s, self.frequency);
         }
-        if (comptime std.Target.current.isDarwin()) {
+        if (comptime builtin.target.isDarwin()) {
             return safeMulDiv(duration, self.frequency.numer, self.frequency.denom);
         }
         return duration;

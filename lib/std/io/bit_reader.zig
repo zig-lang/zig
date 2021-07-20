@@ -13,7 +13,7 @@ const meta = std.meta;
 const math = std.math;
 
 /// Creates a stream which allows for reading bit fields from another stream
-pub fn BitReader(endian: builtin.Endian, comptime ReaderType: type) type {
+pub fn BitReader(endian: std.builtin.Endian, comptime ReaderType: type) type {
     return struct {
         forward_reader: ReaderType,
         bit_buffer: u7,
@@ -167,7 +167,7 @@ pub fn BitReader(endian: builtin.Endian, comptime ReaderType: type) type {
 }
 
 pub fn bitReader(
-    comptime endian: builtin.Endian,
+    comptime endian: std.builtin.Endian,
     underlying_stream: anytype,
 ) BitReader(endian, @TypeOf(underlying_stream)) {
     return BitReader(endian, @TypeOf(underlying_stream)).init(underlying_stream);

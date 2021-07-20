@@ -7,7 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const debug = std.debug;
 const testing = std.testing;
-const native_endian = builtin.target.cpu.arch.endian();
+const native_endian = builtin.cpu.arch.endian();
 const Endian = std.builtin.Endian;
 
 pub fn PackedIntIo(comptime Int: type, comptime endian: Endian) type {
@@ -341,7 +341,7 @@ const we_are_testing_this_with_stage1_which_leaks_comptime_memory = true;
 
 test "PackedIntArray" {
     // TODO @setEvalBranchQuota generates panics in wasm32. Investigate.
-    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+    if (builtin.cpu.arch == .wasm32) return error.SkipZigTest;
     if (we_are_testing_this_with_stage1_which_leaks_comptime_memory) return error.SkipZigTest;
 
     @setEvalBranchQuota(10000);
@@ -405,7 +405,7 @@ test "PackedIntArray initAllTo" {
 
 test "PackedIntSlice" {
     // TODO @setEvalBranchQuota generates panics in wasm32. Investigate.
-    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+    if (builtin.cpu.arch == .wasm32) return error.SkipZigTest;
     if (we_are_testing_this_with_stage1_which_leaks_comptime_memory) return error.SkipZigTest;
 
     @setEvalBranchQuota(10000);
@@ -652,7 +652,7 @@ test "PackedInt(Array/Slice)Endian" {
 test "PackedIntArray at end of available memory" {
     if (we_are_testing_this_with_stage1_which_leaks_comptime_memory) return error.SkipZigTest;
 
-    switch (builtin.target.os.tag) {
+    switch (builtin.os.tag) {
         .linux, .macos, .ios, .freebsd, .netbsd, .openbsd, .windows => {},
         else => return,
     }
@@ -673,7 +673,7 @@ test "PackedIntArray at end of available memory" {
 test "PackedIntSlice at end of available memory" {
     if (we_are_testing_this_with_stage1_which_leaks_comptime_memory) return error.SkipZigTest;
 
-    switch (builtin.target.os.tag) {
+    switch (builtin.os.tag) {
         .linux, .macos, .ios, .freebsd, .netbsd, .openbsd, .windows => {},
         else => return,
     }

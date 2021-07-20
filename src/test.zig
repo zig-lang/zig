@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const link = @import("link.zig");
 const Compilation = @import("Compilation.zig");
 const Allocator = std.mem.Allocator;
@@ -640,7 +641,7 @@ pub const TestContext = struct {
         var fail_count: usize = 0;
 
         for (self.cases.items) |case| {
-            if (build_options.skip_non_native and case.target.getCpuArch() != std.Target.current.cpu.arch)
+            if (build_options.skip_non_native and case.target.getCpuArch() != builtin.cpu.arch)
                 continue;
 
             // Skip tests that require LLVM backend when it is not available

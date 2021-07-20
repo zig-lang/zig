@@ -13,7 +13,7 @@ const ip = std.x.net.ip;
 const fmt = std.fmt;
 const mem = std.mem;
 const testing = std.testing;
-const native_os = std.Target.current.os;
+const native_os = @import("builtin").os;
 
 const IPv4 = std.x.os.IPv4;
 const IPv6 = std.x.os.IPv6;

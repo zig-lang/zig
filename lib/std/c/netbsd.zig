@@ -4,7 +4,7 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("../std.zig");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 
 usingnamespace std.c;
 
@@ -56,7 +56,7 @@ pub const pthread_cond_t = extern struct {
 
 pub const pthread_rwlock_t = extern struct {
     ptr_magic: c_uint = 0x99990009,
-    ptr_interlock: switch (std.builtin.cpu.arch) {
+    ptr_interlock: switch (builtin.cpu.arch) {
         .aarch64, .sparc, .x86_64, .i386 => u8,
         .arm, .powerpc => c_int,
         else => unreachable,

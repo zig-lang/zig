@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const io = std.io;
 const fs = std.fs;
@@ -8,6 +9,7 @@ const Allocator = mem.Allocator;
 const ArrayList = std.ArrayList;
 const ast = std.zig.ast;
 const warn = std.log.warn;
+const native_target = builtin.target;
 
 const Compilation = @import("Compilation.zig");
 const link = @import("link.zig");
@@ -30,7 +32,7 @@ pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
 /// be byte-indexed with a u32 integer.
 pub const max_src_size = std.math.maxInt(u32);
 
-pub const debug_extensions_enabled = std.builtin.mode == .Debug;
+pub const debug_extensions_enabled = builtin.mode == .Debug;
 
 pub const Color = enum {
     auto,
@@ -86,7 +88,7 @@ const debug_usage = normal_usage ++
 
 const usage = if (debug_extensions_enabled) debug_usage else normal_usage;
 
-pub const log_level: std.log.Level = switch (std.builtin.mode) {
+pub const log_level: std.log.Level = switch (builtin.mode) {
     .Debug => .debug,
     .ReleaseSafe, .ReleaseFast => .info,
     .ReleaseSmall => .crit,
@@ -136,7 +138,7 @@ var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{
 pub fn main() anyerror!void {
     var gpa_need_deinit = false;
     const gpa = gpa: {
-        if (!std.builtin.link_libc) {
+        if (!builtin.link_libc) {
             gpa_need_deinit = true;
             break :gpa &general_purpose_allocator.allocator;
         }
@@ -1646,7 +1648,7 @@ fn buildOutputType(
         }
     }
 
-    if (comptime std.Target.current.isDarwin()) {
+    if (comptime builtin.target.isDarwin()) {
         // If we want to link against frameworks, we need system headers.
         if (framework_dirs.items.len > 0 or frameworks.items.len > 0)
             want_native_include_dirs = true;
@@ -1662,7 +1664,7 @@ fn buildOutputType(
             warn("{s}", .{warning});
         }
 
-        const has_sysroot = if (comptime std.Target.current.isDarwin()) outer: {
+        const has_sysroot = if (comptime builtin.target.isDarwin()) outer: {
             const min = target_info.target.os.getVersionRange().semver.min;
             const at_least_catalina = min.major >= 11 or (min.major >= 10 and min.minor >= 15);
             if (at_least_catalina) {
@@ -2254,7 +2256,7 @@ fn runOrTest(
     defer argv.deinit();
 
     if (test_exec_args.len == 0) {
-        if (!std.Target.current.canExecBinariesOf(target)) {
+        if (!builtin.target.canExecBinariesOf(target)) {
             switch (arg_mode) {
                 .zig_test => {
                     warn("created {s} but skipping execution because it is non-native", .{exe_path});
@@ -3782,7 +3784,7 @@ fn gimmeMoreOfThoseSweetSweetFileDescriptors() void {
     const posix = std.os;
 
     var lim = posix.getrlimit(.NOFILE) catch return; // Oh well; we tried.
-    if (comptime std.Target.current.isDarwin()) {
+    if (comptime builtin.target.isDarwin()) {
         // On Darwin, `NOFILE` is bounded by a hardcoded value `OPEN_MAX`.
         // According to the man pages for setrlimit():
         //   setrlimit() now returns with errno set to EINVAL in places that historically succeeded.
@@ -3826,7 +3828,7 @@ fn detectNativeTargetInfo(gpa: *Allocator, cross_target: std.zig.CrossTarget) !s
 /// check for resource leaks can be accurate. In release builds, this
 /// calls exit(0), and does not return.
 pub fn cleanExit() void {
-    if (std.builtin.mode == .Debug) {
+    if (builtin.mode == .Debug) {
         return;
     } else {
         process.exit(0);

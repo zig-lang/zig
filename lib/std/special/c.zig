@@ -10,12 +10,12 @@
 // such as memcpy, memset, and some math functions.
 
 const std = @import("std");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const maxInt = std.math.maxInt;
 const isNan = std.math.isNan;
-const native_arch = std.Target.current.cpu.arch;
-const native_abi = std.Target.current.abi;
-const native_os = std.Target.current.os.tag;
+const native_arch = builtin.cpu.arch;
+const native_abi = builtin.abi;
+const native_os = builtin.os.tag;
 
 const is_wasm = switch (native_arch) {
     .wasm32, .wasm64 => true,
@@ -173,7 +173,7 @@ test "strncmp" {
 
 // Avoid dragging in the runtime safety mechanisms into this .o file,
 // unless we're trying to test this file.
-pub fn panic(msg: []const u8, error_return_trace: ?*builtin.StackTrace) noreturn {
+pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace) noreturn {
     _ = error_return_trace;
     if (builtin.is_test) {
         @setCold(true);

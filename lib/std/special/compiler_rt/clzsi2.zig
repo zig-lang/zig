@@ -4,7 +4,7 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("std");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 
 fn __clzsi2_generic(a: i32) callconv(.C) i32 {
     @setRuntimeSafety(builtin.is_test);
@@ -109,16 +109,16 @@ fn __clzsi2_arm32() callconv(.Naked) void {
 }
 
 pub const __clzsi2 = impl: {
-    switch (std.Target.current.cpu.arch) {
+    switch (builtin.cpu.arch) {
         .arm, .armeb, .thumb, .thumbeb => {
             const use_thumb1 =
-                (std.Target.current.cpu.arch.isThumb() or
-                std.Target.arm.featureSetHas(std.Target.current.cpu.features, .noarm)) and
-                !std.Target.arm.featureSetHas(std.Target.current.cpu.features, .thumb2);
+                (builtin.cpu.arch.isThumb() or
+                std.Target.arm.featureSetHas(builtin.cpu.features, .noarm)) and
+                !std.Target.arm.featureSetHas(builtin.cpu.features, .thumb2);
 
             if (use_thumb1) break :impl __clzsi2_thumb1
             // From here on we're either targeting Thumb2 or ARM.
-            else if (!std.Target.current.cpu.arch.isThumb()) break :impl __clzsi2_arm32
+            else if (!builtin.cpu.arch.isThumb()) break :impl __clzsi2_arm32
             // Use the generic implementation otherwise.
             else break :impl __clzsi2_generic;
         },

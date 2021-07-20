@@ -5,9 +5,10 @@
 // and substantial portions of the software.
 
 const std = @import("../std.zig");
+const builtin = @import("builtin");
 
 const testing = std.testing;
-const target = std.Target.current;
+const target = builtin.target;
 const Ordering = std.atomic.Ordering;
 
 pub fn Atomic(comptime T: type) type {

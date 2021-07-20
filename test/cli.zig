@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const process = std.process;
 const fs = std.fs;
@@ -104,7 +105,7 @@ fn testZigInitExe(zig_exe: []const u8, dir_path: []const u8) !void {
 }
 
 fn testGodboltApi(zig_exe: []const u8, dir_path: []const u8) anyerror!void {
-    if (std.Target.current.os.tag != .linux or std.Target.current.cpu.arch != .x86_64) return;
+    if (builtin.os.tag != .linux or builtin.cpu.arch != .x86_64) return;
 
     const example_zig_path = try fs.path.join(a, &[_][]const u8{ dir_path, "example.zig" });
     const example_s_path = try fs.path.join(a, &[_][]const u8{ dir_path, "example.s" });

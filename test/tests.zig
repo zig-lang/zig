@@ -1,5 +1,5 @@
 const std = @import("std");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const debug = std.debug;
 const warn = debug.warn;
 const build = std.build;
@@ -9,7 +9,7 @@ const fs = std.fs;
 const mem = std.mem;
 const fmt = std.fmt;
 const ArrayList = std.ArrayList;
-const Mode = builtin.Mode;
+const Mode = std.builtin.Mode;
 const LibExeObjStep = build.LibExeObjStep;
 
 // Cases
@@ -29,7 +29,7 @@ pub const CompareOutputContext = @import("src/compare_output.zig").CompareOutput
 
 const TestTarget = struct {
     target: CrossTarget = @as(CrossTarget, .{}),
-    mode: builtin.Mode = .Debug,
+    mode: std.builtin.Mode = .Debug,
     link_libc: bool = false,
     single_threaded: bool = false,
     disable_native: bool = false,
@@ -512,8 +512,8 @@ pub fn addPkgTests(
             continue;
 
         if (test_target.disable_native and
-            test_target.target.getOsTag() == std.Target.current.os.tag and
-            test_target.target.getCpuArch() == std.Target.current.cpu.arch)
+            test_target.target.getOsTag() == builtin.os.tag and
+            test_target.target.getCpuArch() == builtin.cpu.arch)
         {
             continue;
         }
@@ -765,7 +765,7 @@ pub const StackTracesContext = struct {
                     if (line.len == 0) continue;
 
                     // offset search past `[drive]:` on windows
-                    var pos: usize = if (std.Target.current.os.tag == .windows) 2 else 0;
+                    var pos: usize = if (builtin.os.tag == .windows) 2 else 0;
                     // locate delims/anchor
                     const delims = [_][]const u8{ ":", ":", ":", " in ", "(", ")" };
                     var marks = [_]usize{0} ** delims.len;
@@ -1028,7 +1028,7 @@ pub const GenHContext = struct {
     pub fn addCase(self: *GenHContext, case: *const TestCase) void {
         const b = self.b;
 
-        const mode = builtin.Mode.Debug;
+        const mode = std.builtin.Mode.Debug;
         const annotated_case_name = fmt.allocPrint(self.b.allocator, "gen-h {s} ({s})", .{ case.name, @tagName(mode) }) catch unreachable;
         if (self.test_filter) |filter| {
             if (mem.indexOf(u8, annotated_case_name, filter) == null) return;

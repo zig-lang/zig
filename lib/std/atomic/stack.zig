@@ -4,7 +4,7 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const assert = std.debug.assert;
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const expect = std.testing.expect;
 
 /// Many reader, many writer, non-allocating, thread-safe

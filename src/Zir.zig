@@ -11,6 +11,7 @@
 //!    inline assembly is not an exception.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
@@ -2156,7 +2157,7 @@ pub const Inst = struct {
         // bigger than expected. Note that in Debug builds, Zig is allowed
         // to insert a secret field for safety checks.
         comptime {
-            if (std.builtin.mode != .Debug) {
+            if (builtin.mode != .Debug) {
                 assert(@sizeOf(Data) == 8);
             }
         }

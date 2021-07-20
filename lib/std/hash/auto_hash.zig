@@ -7,7 +7,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const mem = std.mem;
 const meta = std.meta;
-const builtin = std.builtin;
+const builtin = @import("builtin");
 
 /// Describes how pointer types should be hashed.
 pub const HashStrategy = enum {
@@ -241,7 +241,7 @@ fn testHashDeepRecursive(key: anytype) u64 {
 
 test "typeContainsSlice" {
     comptime {
-        try testing.expect(!typeContainsSlice(meta.Tag(builtin.TypeInfo)));
+        try testing.expect(!typeContainsSlice(meta.Tag(std.builtin.TypeInfo)));
 
         try testing.expect(typeContainsSlice([]const u8));
         try testing.expect(!typeContainsSlice(u8));
@@ -408,7 +408,7 @@ test "testHash union" {
 
 test "testHash vector" {
     // Disabled because of #3317
-    if (builtin.target.cpu.arch == .mipsel or builtin.target.cpu.arch == .mips) return error.SkipZigTest;
+    if (builtin.cpu.arch == .mipsel or builtin.cpu.arch == .mips) return error.SkipZigTest;
 
     const a: meta.Vector(4, u32) = [_]u32{ 1, 2, 3, 4 };
     const b: meta.Vector(4, u32) = [_]u32{ 1, 2, 3, 5 };

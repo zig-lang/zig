@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const fs = std.fs;
 const mem = std.mem;
 const json = std.json;
@@ -805,7 +806,7 @@ pub fn main() anyerror!void {
     const root_progress = try progress.start("", llvm_targets.len);
     defer root_progress.end();
 
-    if (std.builtin.single_threaded) {
+    if (builtin.single_threaded) {
         for (llvm_targets) |llvm_target| {
             try processOneTarget(Job{
                 .llvm_tblgen_exe = llvm_tblgen_exe,

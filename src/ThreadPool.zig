@@ -4,6 +4,7 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("std");
+const builtin = @import("builtin");
 const ThreadPool = @This();
 
 lock: std.Thread.Mutex = .{},
@@ -57,7 +58,7 @@ pub fn init(self: *ThreadPool, allocator: *std.mem.Allocator) !void {
         .allocator = allocator,
         .workers = &[_]Worker{},
     };
-    if (std.builtin.single_threaded)
+    if (builtin.single_threaded)
         return;
 
     const worker_count = std.math.max(1, std.Thread.getCpuCount() catch 1);
@@ -100,7 +101,7 @@ pub fn deinit(self: *ThreadPool) void {
 }
 
 pub fn spawn(self: *ThreadPool, comptime func: anytype, args: anytype) !void {
-    if (std.builtin.single_threaded) {
+    if (builtin.single_threaded) {
         @call(.{}, func, args);
         return;
     }

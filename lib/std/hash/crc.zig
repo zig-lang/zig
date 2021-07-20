@@ -102,7 +102,7 @@ pub fn Crc32WithPoly(comptime poly: Polynomial) type {
     };
 }
 
-const please_windows_dont_oom = std.Target.current.os.tag == .windows;
+const please_windows_dont_oom = @import("builtin").os.tag == .windows;
 
 test "crc32 ieee" {
     if (please_windows_dont_oom) return error.SkipZigTest;

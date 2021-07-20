@@ -13,7 +13,7 @@ impl: Impl,
 
 const RwLock = @This();
 const std = @import("../std.zig");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const Mutex = std.Thread.Mutex;
 const Semaphore = std.Semaphore;
@@ -165,7 +165,7 @@ pub const PthreadRwLock = struct {
     }
 
     pub fn deinit(rwl: *PthreadRwLock) void {
-        const safe_rc = switch (std.builtin.os.tag) {
+        const safe_rc = switch (builtin.os.tag) {
             .dragonfly, .netbsd => std.os.EAGAIN,
             else => 0,
         };

@@ -32,47 +32,47 @@ const Fe = Field(.{
 });
 
 /// Reject a scalar whose encoding is not canonical.
-pub fn rejectNonCanonical(s: CompressedScalar, endian: builtin.Endian) NonCanonicalError!void {
+pub fn rejectNonCanonical(s: CompressedScalar, endian: std.builtin.Endian) NonCanonicalError!void {
     return Fe.rejectNonCanonical(s, endian);
 }
 
 /// Reduce a 48-bytes scalar to the field size.
-pub fn reduce48(s: [48]u8, endian: builtin.Endian) CompressedScalar {
+pub fn reduce48(s: [48]u8, endian: std.builtin.Endian) CompressedScalar {
     return Scalar.fromBytes48(s, endian).toBytes(endian);
 }
 
 /// Reduce a 64-bytes scalar to the field size.
-pub fn reduce64(s: [64]u8, endian: builtin.Endian) CompressedScalar {
+pub fn reduce64(s: [64]u8, endian: std.builtin.Endian) CompressedScalar {
     return ScalarDouble.fromBytes64(s, endian).toBytes(endian);
 }
 
 /// Return a*b (mod L)
-pub fn mul(a: CompressedScalar, b: CompressedScalar, endian: builtin.Endian) NonCanonicalError!CompressedScalar {
+pub fn mul(a: CompressedScalar, b: CompressedScalar, endian: std.builtin.Endian) NonCanonicalError!CompressedScalar {
     return (try Scalar.fromBytes(a, endian)).mul(try Scalar.fromBytes(b, endian)).toBytes(endian);
 }
 
 /// Return a*b+c (mod L)
-pub fn mulAdd(a: CompressedScalar, b: CompressedScalar, c: CompressedScalar, endian: builtin.Endian) NonCanonicalError!CompressedScalar {
+pub fn mulAdd(a: CompressedScalar, b: CompressedScalar, c: CompressedScalar, endian: std.builtin.Endian) NonCanonicalError!CompressedScalar {
     return (try Scalar.fromBytes(a, endian)).mul(try Scalar.fromBytes(b, endian)).add(try Scalar.fromBytes(c, endian)).toBytes(endian);
 }
 
 /// Return a+b (mod L)
-pub fn add(a: CompressedScalar, b: CompressedScalar, endian: builtin.Endian) NonCanonicalError!CompressedScalar {
+pub fn add(a: CompressedScalar, b: CompressedScalar, endian: std.builtin.Endian) NonCanonicalError!CompressedScalar {
     return (try Scalar.fromBytes(a, endian)).add(try Scalar.fromBytes(b, endian)).toBytes(endian);
 }
 
 /// Return -s (mod L)
-pub fn neg(s: CompressedScalar, endian: builtin.Endian) NonCanonicalError!CompressedScalar {
+pub fn neg(s: CompressedScalar, endian: std.builtin.Endian) NonCanonicalError!CompressedScalar {
     return (try Scalar.fromBytes(s, endian)).neg().toBytes(endian);
 }
 
 /// Return (a-b) (mod L)
-pub fn sub(a: CompressedScalar, b: CompressedScalar, endian: builtin.Endian) NonCanonicalError!CompressedScalar {
+pub fn sub(a: CompressedScalar, b: CompressedScalar, endian: std.builtin.Endian) NonCanonicalError!CompressedScalar {
     return (try Scalar.fromBytes(a, endian)).sub(try Scalar.fromBytes(b.endian)).toBytes(endian);
 }
 
 /// Return a random scalar
-pub fn random(endian: builtin.Endian) CompressedScalar {
+pub fn random(endian: std.builtin.Endian) CompressedScalar {
     return Scalar.random().toBytes(endian);
 }
 
@@ -87,24 +87,24 @@ pub const Scalar = struct {
     pub const one = Scalar{ .fe = Fe.one };
 
     /// Unpack a serialized representation of a scalar.
-    pub fn fromBytes(s: CompressedScalar, endian: builtin.Endian) NonCanonicalError!Scalar {
+    pub fn fromBytes(s: CompressedScalar, endian: std.builtin.Endian) NonCanonicalError!Scalar {
         return Scalar{ .fe = try Fe.fromBytes(s, endian) };
     }
 
     /// Reduce a 384 bit input to the field size.
-    pub fn fromBytes48(s: [48]u8, endian: builtin.Endian) Scalar {
+    pub fn fromBytes48(s: [48]u8, endian: std.builtin.Endian) Scalar {
         const t = ScalarDouble.fromBytes(384, s, endian);
         return t.reduce(384);
     }
 
     /// Reduce a 512 bit input to the field size.
-    pub fn fromBytes64(s: [64]u8, endian: builtin.Endian) Scalar {
+    pub fn fromBytes64(s: [64]u8, endian: std.builtin.Endian) Scalar {
         const t = ScalarDouble.fromBytes(512, s, endian);
         return t.reduce(512);
     }
 
     /// Pack a scalar into bytes.
-    pub fn toBytes(n: Scalar, endian: builtin.Endian) CompressedScalar {
+    pub fn toBytes(n: Scalar, endian: std.builtin.Endian) CompressedScalar {
         return n.fe.toBytes(endian);
     }
 
@@ -186,7 +186,7 @@ const ScalarDouble = struct {
     x2: Fe,
     x3: Fe,
 
-    fn fromBytes(comptime bits: usize, s_: [bits / 8]u8, endian: builtin.Endian) ScalarDouble {
+    fn fromBytes(comptime bits: usize, s_: [bits / 8]u8, endian: std.builtin.Endian) ScalarDouble {
         debug.assert(bits > 0 and bits <= 512 and bits >= Fe.saturated_bits and bits <= Fe.saturated_bits * 3);
 
         var s = s_;

@@ -4,16 +4,16 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("../std.zig");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const os = std.os;
 const io = std.io;
 const mem = std.mem;
 const math = std.math;
 const assert = std.debug.assert;
 const windows = os.windows;
-const Os = builtin.Os;
+const Os = std.builtin.Os;
 const maxInt = std.math.maxInt;
-const is_windows = std.Target.current.os.tag == .windows;
+const is_windows = builtin.os.tag == .windows;
 
 pub const File = struct {
     /// The OS-specific file descriptor or file handle.

@@ -15,7 +15,7 @@ const math = std.math;
 const windows = std.os.windows;
 const fs = std.fs;
 const process = std.process;
-const native_os = builtin.target.os.tag;
+const native_os = builtin.os.tag;
 
 pub const sep_windows = '\\';
 pub const sep_posix = '/';
@@ -707,7 +707,7 @@ test "resolve" {
 }
 
 test "resolveWindows" {
-    if (builtin.target.cpu.arch == .aarch64) {
+    if (builtin.cpu.arch == .aarch64) {
         // TODO https://github.com/ziglang/zig/issues/3288
         return error.SkipZigTest;
     }
@@ -1165,7 +1165,7 @@ pub fn relativePosix(allocator: *Allocator, from: []const u8, to: []const u8) ![
 }
 
 test "relative" {
-    if (builtin.target.cpu.arch == .aarch64) {
+    if (builtin.cpu.arch == .aarch64) {
         // TODO https://github.com/ziglang/zig/issues/3288
         return error.SkipZigTest;
     }

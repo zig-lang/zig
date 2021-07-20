@@ -6,6 +6,7 @@
 // Based on public domain Supercop by Daniel J. Bernstein
 
 const std = @import("../std.zig");
+const builtin = @import("builtin");
 const math = std.math;
 const mem = std.mem;
 const assert = std.debug.assert;
@@ -364,7 +365,7 @@ fn ChaChaNonVecImpl(comptime rounds_nb: usize) type {
 }
 
 fn ChaChaImpl(comptime rounds_nb: usize) type {
-    return if (std.Target.current.cpu.arch == .x86_64) ChaChaVecImpl(rounds_nb) else ChaChaNonVecImpl(rounds_nb);
+    return if (builtin.cpu.arch == .x86_64) ChaChaVecImpl(rounds_nb) else ChaChaNonVecImpl(rounds_nb);
 }
 
 fn keyToWords(key: [32]u8) [8]u32 {

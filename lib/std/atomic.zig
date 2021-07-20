@@ -5,7 +5,7 @@
 // and substantial portions of the software.
 
 const std = @import("std.zig");
-const target = std.Target.current;
+const target = @import("builtin").target;
 
 pub const Ordering = std.builtin.AtomicOrder;
 

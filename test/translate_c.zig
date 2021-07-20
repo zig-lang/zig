@@ -1,9 +1,10 @@
 const tests = @import("tests.zig");
 const std = @import("std");
+const builtin = @import("builtin");
 const CrossTarget = std.zig.CrossTarget;
 
 pub fn addCases(cases: *tests.TranslateCContext) void {
-    const default_enum_type = if (std.Target.current.abi == .msvc) "c_int" else "c_uint";
+    const default_enum_type = if (builtin.abi == .msvc) "c_int" else "c_uint";
 
     cases.add("field access is grouped if necessary",
         \\unsigned long foo(unsigned long x) {
@@ -1148,7 +1149,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\pub export fn foo() void {}
     });
 
-    if (std.Target.current.os.tag != .windows) {
+    if (builtin.os.tag != .windows) {
         // Windows treats this as an enum with type c_int
         cases.add("big negative enum init values when C ABI supports long long enums",
             \\enum EnumWithInits {
@@ -1553,7 +1554,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\}
     });
 
-    if (std.Target.current.os.tag != .windows) {
+    if (builtin.os.tag != .windows) {
         // sysv_abi not currently supported on windows
         cases.add("Macro qualified functions",
             \\void __attribute__((sysv_abi)) foo(void);
@@ -2145,7 +2146,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\}
     });
 
-    if (std.Target.current.os.tag != .windows) {
+    if (builtin.os.tag != .windows) {
         // When clang uses the <arch>-windows-none triple it behaves as MSVC and
         // interprets the inner `struct Bar` as an anonymous structure
         cases.add("type referenced struct",
@@ -3378,7 +3379,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\pub const FOO = @import("std").zig.c_translation.cast(c_int, @import("std").zig.c_translation.promoteIntLiteral(c_int, 0x8000, .hexadecimal));
     });
 
-    if (std.Target.current.abi == .msvc) {
+    if (builtin.abi == .msvc) {
         cases.add("nameless struct fields",
             \\typedef struct NAMED
             \\{

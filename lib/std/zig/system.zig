@@ -4,6 +4,7 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("../std.zig");
+const builtin = @import("builtin");
 const elf = std.elf;
 const mem = std.mem;
 const fs = std.fs;
@@ -14,7 +15,7 @@ const process = std.process;
 const Target = std.Target;
 const CrossTarget = std.zig.CrossTarget;
 const macos = @import("system/macos.zig");
-const native_endian = std.Target.current.cpu.arch.endian();
+const native_endian = builtin.cpu.arch.endian();
 const linux = @import("system/linux.zig");
 pub const windows = @import("system/windows.zig");
 
@@ -95,7 +96,7 @@ pub const NativePaths = struct {
             return self;
         }
 
-        if (comptime Target.current.isDarwin()) {
+        if (comptime builtin.target.isDarwin()) {
             try self.addIncludeDir("/usr/include");
             try self.addIncludeDir("/usr/local/include");
 
@@ -235,7 +236,7 @@ pub const NativeTargetInfo = struct {
     pub fn detect(allocator: *Allocator, cross_target: CrossTarget) DetectError!NativeTargetInfo {
         var os = cross_target.getOsTag().defaultVersionRange();
         if (cross_target.os_tag == null) {
-            switch (Target.current.os.tag) {
+            switch (builtin.os.tag) {
                 .linux => {
                     const uts = std.os.uname();
                     const release = mem.spanZ(&uts.release);
@@ -257,7 +258,7 @@ pub const NativeTargetInfo = struct {
                 },
                 .macos => try macos.detect(&os),
                 .freebsd, .netbsd, .dragonfly => {
-                    const key = switch (Target.current.os.tag) {
+                    const key = switch (builtin.os.tag) {
                         .freebsd => "kern.osreldate",
                         .netbsd, .dragonfly => "kern.osrevision",
                         else => unreachable,
@@ -273,7 +274,7 @@ pub const NativeTargetInfo = struct {
                         error.Unexpected => return error.OSVersionDetectionFail,
                     };
 
-                    switch (Target.current.os.tag) {
+                    switch (builtin.os.tag) {
                         .freebsd => {
                             // https://www.freebsd.org/doc/en_US.ISO8859-1/books/porters-handbook/versions.html
                             // Major * 100,000 has been convention since FreeBSD 2.2 (1997)
@@ -429,8 +430,8 @@ pub const NativeTargetInfo = struct {
         os: Target.Os,
         cross_target: CrossTarget,
     ) DetectError!NativeTargetInfo {
-        const native_target_has_ld = comptime Target.current.hasDynamicLinker();
-        const is_linux = Target.current.os.tag == .linux;
+        const native_target_has_ld = comptime builtin.target.hasDynamicLinker();
+        const is_linux = builtin.os.tag == .linux;
         const have_all_info = cross_target.dynamic_linker.get() != null and
             cross_target.abi != null and (!is_linux or cross_target.abi.?.isGnu());
         const os_is_non_native = cross_target.os_tag != null;
@@ -447,7 +448,7 @@ pub const NativeTargetInfo = struct {
         // compiler for target riscv64-linux-musl and provide a tarball for users to download.
         // A user could then run that zig compiler on riscv64-linux-gnu. This use case is well-defined
         // and supported by Zig. But that means that we must detect the system ABI here rather than
-        // relying on `Target.current`.
+        // relying on `builtin.target`.
         const all_abis = comptime blk: {
             assert(@enumToInt(Target.Abi.none) == 0);
             const fields = std.meta.fields(Target.Abi)[1..];
@@ -508,7 +509,7 @@ pub const NativeTargetInfo = struct {
 
             // Look for glibc version.
             var os_adjusted = os;
-            if (Target.current.os.tag == .linux and found_ld_info.abi.isGnu() and
+            if (builtin.os.tag == .linux and found_ld_info.abi.isGnu() and
                 cross_target.glibc_version == null)
             {
                 for (lib_paths) |lib_path| {
@@ -724,7 +725,7 @@ pub const NativeTargetInfo = struct {
                         }
                     },
                     // We only need this for detecting glibc version.
-                    elf.PT_DYNAMIC => if (Target.current.os.tag == .linux and result.target.isGnuLibC() and
+                    elf.PT_DYNAMIC => if (builtin.os.tag == .linux and result.target.isGnuLibC() and
                         cross_target.glibc_version == null)
                     {
                         var dyn_off = elfInt(is_64, need_bswap, ph32.p_offset, ph64.p_offset);
@@ -771,7 +772,7 @@ pub const NativeTargetInfo = struct {
             }
         }
 
-        if (Target.current.os.tag == .linux and result.target.isGnuLibC() and cross_target.glibc_version == null) {
+        if (builtin.os.tag == .linux and result.target.isGnuLibC() and cross_target.glibc_version == null) {
             if (rpath_offset) |rpoff| {
                 const shstrndx = elfInt(is_64, need_bswap, hdr32.e_shstrndx, hdr64.e_shstrndx);
 
@@ -963,14 +964,14 @@ pub const NativeTargetInfo = struct {
         // Here we switch on a comptime value rather than `cpu_arch`. This is valid because `cpu_arch`,
         // although it is a runtime value, is guaranteed to be one of the architectures in the set
         // of the respective switch prong.
-        switch (std.Target.current.cpu.arch) {
+        switch (builtin.cpu.arch) {
             .x86_64, .i386 => {
                 return @import("system/x86.zig").detectNativeCpuAndFeatures(cpu_arch, os, cross_target);
             },
             else => {},
         }
 
-        switch (std.Target.current.os.tag) {
+        switch (builtin.os.tag) {
             .linux => return linux.detectNativeCpuAndFeatures(),
             .macos => return macos.detectNativeCpuAndFeatures(),
             else => {},

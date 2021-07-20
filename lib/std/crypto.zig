@@ -158,7 +158,7 @@ const std = @import("std.zig");
 pub const errors = @import("crypto/errors.zig");
 
 test "crypto" {
-    const please_windows_dont_oom = std.Target.current.os.tag == .windows;
+    const please_windows_dont_oom = @import("builtin").os.tag == .windows;
     if (please_windows_dont_oom) return error.SkipZigTest;
 
     inline for (std.meta.declarations(@This())) |decl| {

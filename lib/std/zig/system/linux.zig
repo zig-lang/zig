@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 const io = std.io;
 const fs = std.fs;
@@ -450,7 +451,7 @@ pub fn detectNativeCpuAndFeatures() ?Target.Cpu {
     };
     defer f.close();
 
-    const current_arch = std.Target.current.cpu.arch;
+    const current_arch = builtin.cpu.arch;
     switch (current_arch) {
         .arm, .armeb, .thumb, .thumbeb, .aarch64, .aarch64_be, .aarch64_32 => {
             return ArmCpuinfoParser.parse(current_arch, f.reader()) catch null;

@@ -7,7 +7,7 @@ const std = @import("../std.zig");
 const assert = std.debug.assert;
 const builtin = @import("builtin");
 const macho = std.macho;
-const native_arch = builtin.target.cpu.arch;
+const native_arch = builtin.cpu.arch;
 
 usingnamespace @import("../os/bits.zig");
 
@@ -72,7 +72,7 @@ const mach_hdr = if (@sizeOf(usize) == 8) mach_header_64 else mach_header;
 var dummy_execute_header: mach_hdr = undefined;
 pub extern var _mh_execute_header: mach_hdr;
 comptime {
-    if (std.Target.current.isDarwin()) {
+    if (builtin.target.isDarwin()) {
         @export(dummy_execute_header, .{ .name = "_mh_execute_header", .linkage = .Weak });
     }
 }

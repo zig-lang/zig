@@ -5,7 +5,7 @@
 // and substantial portions of the software.
 usingnamespace @import("bits.zig");
 const std = @import("std");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const windows = @import("../windows.zig");
 const unexpectedError = windows.unexpectedError;
@@ -14,7 +14,7 @@ const SetLastError = windows.kernel32.SetLastError;
 
 fn selectSymbol(comptime function_static: anytype, function_dynamic: @TypeOf(function_static), comptime os: std.Target.Os.WindowsVersion) @TypeOf(function_static) {
     comptime {
-        const sym_ok = std.Target.current.os.isAtLeast(.windows, os);
+        const sym_ok = builtin.os.isAtLeast(.windows, os);
         if (sym_ok == true) return function_static;
         if (sym_ok == null) return function_dynamic;
         if (sym_ok == false) @compileError("Target OS range does not support function, at least " ++ @tagName(os) ++ " is required");

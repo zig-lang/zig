@@ -13,7 +13,7 @@ const meta = std.meta;
 const math = std.math;
 
 /// Creates a stream which allows for writing bit fields to another stream
-pub fn BitWriter(endian: builtin.Endian, comptime WriterType: type) type {
+pub fn BitWriter(endian: std.builtin.Endian, comptime WriterType: type) type {
     return struct {
         forward_writer: WriterType,
         bit_buffer: u8,
@@ -143,7 +143,7 @@ pub fn BitWriter(endian: builtin.Endian, comptime WriterType: type) type {
 }
 
 pub fn bitWriter(
-    comptime endian: builtin.Endian,
+    comptime endian: std.builtin.Endian,
     underlying_stream: anytype,
 ) BitWriter(endian, @TypeOf(underlying_stream)) {
     return BitWriter(endian, @TypeOf(underlying_stream)).init(underlying_stream);

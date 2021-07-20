@@ -11,7 +11,7 @@
 const std = @import("std");
 const root = @import("root");
 
-pub usingnamespace switch (std.Target.current.os.tag) {
+pub usingnamespace switch (@import("builtin").os.tag) {
     .macos, .ios, .tvos, .watchos => @import("bits/darwin.zig"),
     .dragonfly => @import("bits/dragonfly.zig"),
     .freebsd => @import("bits/freebsd.zig"),

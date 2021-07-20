@@ -21,7 +21,7 @@ const expect = std.testing.expect;
 const gcc_word = usize;
 
 comptime {
-    assert(std.builtin.link_libc);
+    assert(@import("builtin").link_libc);
 }
 
 /// public entrypoint for generated code using EmulatedTLS

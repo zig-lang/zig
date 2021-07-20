@@ -5,7 +5,7 @@
 // and substantial portions of the software.
 const std = @import("../std.zig");
 const testing = std.testing;
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const fs = std.fs;
 const mem = std.mem;
 const wasi = std.os.wasi;

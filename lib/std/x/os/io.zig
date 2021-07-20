@@ -3,7 +3,7 @@ const std = @import("../../std.zig");
 const os = std.os;
 const mem = std.mem;
 const testing = std.testing;
-const native_os = std.Target.current.os;
+const native_os = @import("builtin").os;
 
 /// POSIX `iovec`, or Windows `WSABUF`. The difference between the two are the ordering
 /// of fields, alongside the length being represented as either a ULONG or a size_t.

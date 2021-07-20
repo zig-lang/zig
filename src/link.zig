@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 const Allocator = std.mem.Allocator;
 const fs = std.fs;
@@ -15,7 +16,7 @@ const build_options = @import("build_options");
 const LibCInstallation = @import("libc_installation.zig").LibCInstallation;
 const wasi_libc = @import("wasi_libc.zig");
 
-pub const producer_string = if (std.builtin.is_test) "zig test" else "zig " ++ build_options.version;
+pub const producer_string = if (builtin.is_test) "zig test" else "zig " ++ build_options.version;
 
 pub const Emit = struct {
     /// Where the output will go.
@@ -278,7 +279,7 @@ pub const File = struct {
                     // make executable, so we don't have to close it.
                     return;
                 }
-                if (comptime std.Target.current.isDarwin() and std.Target.current.cpu.arch == .aarch64) {
+                if (comptime builtin.target.isDarwin() and builtin.cpu.arch == .aarch64) {
                     if (base.options.target.cpu.arch != .aarch64) return; // If we're not targeting aarch64, nothing to do.
                     // XNU starting with Big Sur running on arm64 is caching inodes of running binaries.
                     // Any change to the binary will effectively invalidate the kernel's cache
@@ -674,7 +675,7 @@ pub fn determineMode(options: Options) fs.File.Mode {
     // with 0o755 permissions, but it works appropriately if the system is configured
     // more leniently. As another data point, C's fopen seems to open files with the
     // 666 mode.
-    const executable_mode = if (std.Target.current.os.tag == .windows) 0 else 0o777;
+    const executable_mode = if (builtin.os.tag == .windows) 0 else 0o777;
     switch (options.effectiveOutputMode()) {
         .Lib => return switch (options.link_mode) {
             .Dynamic => executable_mode,

@@ -6,9 +6,9 @@ const Allocator = std.mem.Allocator;
 const Batch = std.event.Batch;
 const build_options = @import("build_options");
 
-const is_darwin = Target.current.isDarwin();
-const is_windows = Target.current.os.tag == .windows;
-const is_haiku = Target.current.os.tag == .haiku;
+const is_darwin = builtin.target.isDarwin();
+const is_windows = builtin.os.tag == .windows;
+const is_haiku = builtin.os.tag == .haiku;
 
 const log = std.log.scoped(.libc_installation);
 
@@ -97,25 +97,25 @@ pub const LibCInstallation = struct {
             return error.ParseError;
         }
         if (self.crt_dir == null and !is_darwin) {
-            log.err("crt_dir may not be empty for {s}\n", .{@tagName(Target.current.os.tag)});
+            log.err("crt_dir may not be empty for {s}\n", .{@tagName(builtin.os.tag)});
             return error.ParseError;
         }
         if (self.msvc_lib_dir == null and is_windows) {
             log.err("msvc_lib_dir may not be empty for {s}-{s}\n", .{
-                @tagName(Target.current.os.tag),
-                @tagName(Target.current.abi),
+                @tagName(builtin.os.tag),
+                @tagName(builtin.abi),
             });
             return error.ParseError;
         }
         if (self.kernel32_lib_dir == null and is_windows) {
             log.err("kernel32_lib_dir may not be empty for {s}-{s}\n", .{
-                @tagName(Target.current.os.tag),
-                @tagName(Target.current.abi),
+                @tagName(builtin.os.tag),
+                @tagName(builtin.abi),
             });
             return error.ParseError;
         }
         if (self.gcc_dir == null and is_haiku) {
-            log.err("gcc_dir may not be empty for {s}\n", .{@tagName(Target.current.os.tag)});
+            log.err("gcc_dir may not be empty for {s}\n", .{@tagName(builtin.os.tag)});
             return error.ParseError;
         }
 
@@ -213,7 +213,7 @@ pub const LibCInstallation = struct {
                 var batch = Batch(FindError!void, 2, .auto_async).init();
                 errdefer batch.wait() catch {};
                 batch.add(&async self.findNativeIncludeDirPosix(args));
-                switch (Target.current.os.tag) {
+                switch (builtin.os.tag) {
                     .freebsd, .netbsd, .openbsd, .dragonfly => self.crt_dir = try std.mem.dupeZ(args.allocator, u8, "/usr/lib"),
                     .linux => batch.add(&async self.findNativeCrtDirPosix(args)),
                     else => {},
@@ -412,7 +412,7 @@ pub const LibCInstallation = struct {
         var result_buf = std.ArrayList(u8).init(allocator);
         defer result_buf.deinit();
 
-        const arch_sub_dir = switch (builtin.target.cpu.arch) {
+        const arch_sub_dir = switch (builtin.cpu.arch) {
             .i386 => "x86",
             .x86_64 => "x64",
             .arm, .armeb => "arm",
@@ -475,7 +475,7 @@ pub const LibCInstallation = struct {
         var result_buf = std.ArrayList(u8).init(allocator);
         defer result_buf.deinit();
 
-        const arch_sub_dir = switch (builtin.target.cpu.arch) {
+        const arch_sub_dir = switch (builtin.cpu.arch) {
             .i386 => "x86",
             .x86_64 => "x64",
             .arm, .armeb => "arm",

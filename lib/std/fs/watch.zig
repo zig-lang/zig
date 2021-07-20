@@ -4,7 +4,7 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 const std = @import("std");
-const builtin = std.builtin;
+const builtin = @import("builtin");
 const event = std.event;
 const assert = std.debug.assert;
 const testing = std.testing;
@@ -255,7 +255,7 @@ pub fn Watch(comptime V: type) type {
             };
 
             // @TODO Can I close this fd and get an error from bsdWaitKev?
-            const flags = if (comptime std.Target.current.isDarwin()) os.O_SYMLINK | os.O_EVTONLY else 0;
+            const flags = if (comptime builtin.target.isDarwin()) os.O_SYMLINK | os.O_EVTONLY else 0;
             const fd = try os.open(realpath, flags, 0);
             gop.value_ptr.putter_frame = async self.kqPutEvents(fd, gop.key_ptr.*, gop.value_ptr.*);
             return null;

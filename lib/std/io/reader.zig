@@ -253,12 +253,12 @@ pub fn Reader(
             return mem.readIntBig(T, &bytes);
         }
 
-        pub fn readInt(self: Self, comptime T: type, endian: builtin.Endian) !T {
+        pub fn readInt(self: Self, comptime T: type, endian: std.builtin.Endian) !T {
             const bytes = try self.readBytesNoEof((@typeInfo(T).Int.bits + 7) / 8);
             return mem.readInt(T, &bytes, endian);
         }
 
-        pub fn readVarInt(self: Self, comptime ReturnType: type, endian: builtin.Endian, size: usize) !ReturnType {
+        pub fn readVarInt(self: Self, comptime ReturnType: type, endian: std.builtin.Endian, size: usize) !ReturnType {
             assert(size <= @sizeOf(ReturnType));
             var bytes_buf: [@sizeOf(ReturnType)]u8 = undefined;
             const bytes = bytes_buf[0..size];
@@ -298,7 +298,7 @@ pub fn Reader(
 
         pub fn readStruct(self: Self, comptime T: type) !T {
             // Only extern and packed structs have defined in-memory layout.
-            comptime assert(@typeInfo(T).Struct.layout != builtin.TypeInfo.ContainerLayout.Auto);
+            comptime assert(@typeInfo(T).Struct.layout != std.builtin.TypeInfo.ContainerLayout.Auto);
             var res: [1]T = undefined;
             try self.readNoEof(mem.sliceAsBytes(res[0..]));
             return res[0];
@@ -307,7 +307,7 @@ pub fn Reader(
         /// Reads an integer with the same size as the given enum's tag type. If the integer matches
         /// an enum tag, casts the integer to the enum tag and returns it. Otherwise, returns an error.
         /// TODO optimization taking advantage of most fields being in order
-        pub fn readEnum(self: Self, comptime Enum: type, endian: builtin.Endian) !Enum {
+        pub fn readEnum(self: Self, comptime Enum: type, endian: std.builtin.Endian) !Enum {
             const E = error{
                 /// An integer was read, but it did not match any of the tags in the supplied enum.
                 InvalidValue,

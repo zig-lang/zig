@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const mem = std.mem;
 const log = std.log.scoped(.c);
@@ -600,7 +601,7 @@ pub const DeclGen = struct {
                 dg.typedefs.putAssumeCapacityNoClobber(t, .{ .name = name, .rendered = rendered });
             },
             .ErrorSet => {
-                comptime std.debug.assert(Type.initTag(.anyerror).abiSize(std.Target.current) == 2);
+                comptime std.debug.assert(Type.initTag(.anyerror).abiSize(builtin.target) == 2);
                 try w.writeAll("uint16_t");
             },
             .ErrorUnion => {
