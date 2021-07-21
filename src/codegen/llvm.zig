@@ -30,6 +30,7 @@ pub fn targetTriple(allocator: *Allocator, target: std.Target) ![:0]u8 {
         .bpfeb => "bpfeb",
         .csky => "csky",
         .hexagon => "hexagon",
+        .m68k => "m68k",
         .mips => "mips",
         .mipsel => "mipsel",
         .mips64 => "mips64",

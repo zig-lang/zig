@@ -386,9 +386,9 @@ MODIFIERS:
 )";
 
 static void printHelpMessage() {
-  if (Stem.contains_lower("ranlib"))
+  if (Stem.contains_insensitive("ranlib"))
     outs() << RanlibHelp;
-  else if (Stem.contains_lower("ar"))
+  else if (Stem.contains_insensitive("ar"))
     outs() << ArHelp;
 }
 
@@ -1543,7 +1543,7 @@ int ZigLlvmAr_main(int argc, char **argv) {
     // Lib.exe -> lib (see D44808, MSBuild runs Lib.exe)
     // dlltool.exe -> dlltool
     // arm-pokymllib32-linux-gnueabi-llvm-ar-10 -> ar
-    auto I = Stem.rfind_lower(Tool);
+    auto I = Stem.rfind_insensitive(Tool);
     return I != StringRef::npos &&
            (I + Tool.size() == Stem.size() || !isAlnum(Stem[I + Tool.size()]));
   };

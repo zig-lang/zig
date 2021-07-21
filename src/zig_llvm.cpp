@@ -155,9 +155,6 @@ LLVMTargetMachineRef ZigLLVMCreateTargetMachine(LLVMTargetRef T, const char *Tri
 
     TargetOptions opt;
 
-    // Work around the missing initialization of this field in the default
-    // constructor. Use -1 so that the default value is used.
-    opt.StackProtectorGuardOffset = (unsigned)-1;
 
     opt.FunctionSections = function_sections;
     switch (float_abi) {
@@ -238,7 +235,7 @@ bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMM
 
     if (asm_filename) {
         std::error_code EC;
-        dest_asm_ptr = new(std::nothrow) raw_fd_ostream(asm_filename, EC, sys::fs::F_None);
+        dest_asm_ptr = new(std::nothrow) raw_fd_ostream(asm_filename, EC, sys::fs::OF_None);
         if (EC) {
             *error_message = strdup((const char *)StringRef(EC.message()).bytes_begin());
             return true;
@@ -246,7 +243,7 @@ bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMM
     }
     if (bin_filename) {
         std::error_code EC;
-        dest_bin_ptr = new(std::nothrow) raw_fd_ostream(bin_filename, EC, sys::fs::F_None);
+        dest_bin_ptr = new(std::nothrow) raw_fd_ostream(bin_filename, EC, sys::fs::OF_None);
         if (EC) {
             *error_message = strdup((const char *)StringRef(EC.message()).bytes_begin());
             return true;
@@ -280,7 +277,7 @@ bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMM
     StandardInstrumentations std_instrumentations(false);
     std_instrumentations.registerCallbacks(instr_callbacks);
 
-    PassBuilder pass_builder(false, &target_machine, pipeline_opts,
+    PassBuilder pass_builder(&target_machine, pipeline_opts,
                              None, &instr_callbacks);
     using OptimizationLevel = typename PassBuilder::OptimizationLevel;
 
@@ -989,11 +986,12 @@ static AtomicOrdering mapFromLLVMOrdering(LLVMAtomicOrdering Ordering) {
 }
 
 LLVMValueRef ZigLLVMBuildCmpXchg(LLVMBuilderRef builder, LLVMValueRef ptr, LLVMValueRef cmp,
-        LLVMValueRef new_val, LLVMAtomicOrdering success_ordering,
+        LLVMValueRef new_val, unsigned Align, LLVMAtomicOrdering success_ordering,
         LLVMAtomicOrdering failure_ordering, bool is_weak)
 {
     AtomicCmpXchgInst *inst = unwrap(builder)->CreateAtomicCmpXchg(unwrap(ptr), unwrap(cmp),
-                unwrap(new_val), mapFromLLVMOrdering(success_ordering), mapFromLLVMOrdering(failure_ordering));
+                unwrap(new_val), MaybeAlign(Align), mapFromLLVMOrdering(success_ordering),
+                mapFromLLVMOrdering(failure_ordering));
     inst->setWeak(is_weak);
     return wrap(inst);
 }
@@ -1024,7 +1022,7 @@ LLVMValueRef ZigLLVMBuildAShrExact(LLVMBuilderRef builder, LLVMValueRef LHS, LLV
 
 void ZigLLVMSetTailCall(LLVMValueRef Call) {
     unwrap<CallInst>(Call)->setTailCallKind(CallInst::TCK_MustTail);
-} 
+}
 
 void ZigLLVMSetCallSret(LLVMValueRef Call, LLVMTypeRef return_type) {
     const AttributeList attr_set = unwrap<CallInst>(Call)->getAttributes();
@@ -1233,12 +1231,12 @@ inline Attribute unwrap(LLVMAttributeRef Attr) {
 }
 
 LLVMValueRef ZigLLVMBuildAtomicRMW(LLVMBuilderRef B, enum ZigLLVM_AtomicRMWBinOp op,
-    LLVMValueRef PTR, LLVMValueRef Val,
-    LLVMAtomicOrdering ordering, LLVMBool singleThread) 
+    LLVMValueRef PTR, LLVMValueRef Val, unsigned Align,
+    LLVMAtomicOrdering ordering, LLVMBool singleThread)
 {
     AtomicRMWInst::BinOp intop = toLLVMRMWBinOp(op);
     return wrap(unwrap(B)->CreateAtomicRMW(intop, unwrap(PTR),
-        unwrap(Val), toLLVMOrdering(ordering), 
+        unwrap(Val), MaybeAlign(Align), toLLVMOrdering(ordering),
         singleThread ? SyncScope::SingleThread : SyncScope::System));
 }
 
@@ -1298,6 +1296,7 @@ static_assert((Triple::ArchType)ZigLLVM_bpfel == Triple::bpfel, "");
 static_assert((Triple::ArchType)ZigLLVM_bpfeb == Triple::bpfeb, "");
 static_assert((Triple::ArchType)ZigLLVM_csky == Triple::csky, "");
 static_assert((Triple::ArchType)ZigLLVM_hexagon == Triple::hexagon, "");
+static_assert((Triple::ArchType)ZigLLVM_m68k == Triple::m68k, "");
 static_assert((Triple::ArchType)ZigLLVM_mips == Triple::mips, "");
 static_assert((Triple::ArchType)ZigLLVM_mipsel == Triple::mipsel, "");
 static_assert((Triple::ArchType)ZigLLVM_mips64 == Triple::mips64, "");
@@ -1414,6 +1413,7 @@ static_assert((Triple::EnvironmentType)ZigLLVM_Android == Triple::Android, "");
 static_assert((Triple::EnvironmentType)ZigLLVM_Musl == Triple::Musl, "");
 static_assert((Triple::EnvironmentType)ZigLLVM_MuslEABI == Triple::MuslEABI, "");
 static_assert((Triple::EnvironmentType)ZigLLVM_MuslEABIHF == Triple::MuslEABIHF, "");
+static_assert((Triple::EnvironmentType)ZigLLVM_MuslX32 == Triple::MuslX32, "");
 static_assert((Triple::EnvironmentType)ZigLLVM_MSVC == Triple::MSVC, "");
 static_assert((Triple::EnvironmentType)ZigLLVM_Itanium == Triple::Itanium, "");
 static_assert((Triple::EnvironmentType)ZigLLVM_Cygnus == Triple::Cygnus, "");

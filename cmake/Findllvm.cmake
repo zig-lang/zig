@@ -9,37 +9,37 @@
 
 find_path(LLVM_INCLUDE_DIRS NAMES llvm/IR/IRBuilder.h
   PATHS
-    /usr/lib/llvm/12/include
-    /usr/lib/llvm-12/include
-    /usr/lib/llvm-12.0/include
-    /usr/local/llvm12/include
-    /usr/local/llvm120/include
+    /usr/lib/llvm/13/include
+    /usr/lib/llvm-13/include
+    /usr/lib/llvm-13.0/include
+    /usr/local/llvm13/include
+    /usr/local/llvm130/include
     /mingw64/include
 )
 
 if(ZIG_PREFER_CLANG_CPP_DYLIB)
   find_library(LLVM_LIBRARIES
     NAMES
-      LLVM-12.0
-      LLVM-12
-      LLVM-120
+      LLVM-13.0
+      LLVM-13
+      LLVM-130
       LLVM
     PATHS
       ${LLVM_LIBDIRS}
-      /usr/lib/llvm/12/lib
-      /usr/lib/llvm/12/lib64
-      /usr/lib/llvm-12/lib
-      /usr/local/llvm12/lib
-      /usr/local/llvm120/lib
+      /usr/lib/llvm/13/lib
+      /usr/lib/llvm/13/lib64
+      /usr/lib/llvm-13/lib
+      /usr/local/llvm13/lib
+      /usr/local/llvm130/lib
   )
 
   find_program(LLVM_CONFIG_EXE
-      NAMES llvm-config-12 llvm-config-12.0 llvm-config120 llvm-config12 llvm-config
+      NAMES llvm-config-13 llvm-config-13.0 llvm-config130 llvm-config13 llvm-config
       PATHS
           "/mingw64/bin"
           "/c/msys64/mingw64/bin"
           "c:/msys64/mingw64/bin"
-          "C:/Libraries/llvm-12.0.0/bin")
+          "C:/Libraries/llvm-13.0.0/bin")
 
   if ("${LLVM_CONFIG_EXE}" STREQUAL "LLVM_CONFIG_EXE-NOTFOUND")
     message(FATAL_ERROR "unable to find llvm-config")
@@ -54,23 +54,23 @@ if(ZIG_PREFER_CLANG_CPP_DYLIB)
     OUTPUT_VARIABLE LLVM_CONFIG_VERSION
     OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-  if("${LLVM_CONFIG_VERSION}" VERSION_LESS 12)
-    message(FATAL_ERROR "expected LLVM 12.x but found ${LLVM_CONFIG_VERSION} using ${LLVM_CONFIG_EXE}")
+  if("${LLVM_CONFIG_VERSION}" VERSION_LESS 13)
+    message(FATAL_ERROR "expected LLVM 13.x but found ${LLVM_CONFIG_VERSION} using ${LLVM_CONFIG_EXE}")
   endif()
-  if("${LLVM_CONFIG_VERSION}" VERSION_EQUAL 13)
-    message(FATAL_ERROR "expected LLVM 12.x but found ${LLVM_CONFIG_VERSION} using ${LLVM_CONFIG_EXE}")
+  if("${LLVM_CONFIG_VERSION}" VERSION_EQUAL 14)
+    message(FATAL_ERROR "expected LLVM 13.x but found ${LLVM_CONFIG_VERSION} using ${LLVM_CONFIG_EXE}")
   endif()
-  if("${LLVM_CONFIG_VERSION}" VERSION_GREATER 13)
-    message(FATAL_ERROR "expected LLVM 12.x but found ${LLVM_CONFIG_VERSION} using ${LLVM_CONFIG_EXE}")
+  if("${LLVM_CONFIG_VERSION}" VERSION_GREATER 14)
+    message(FATAL_ERROR "expected LLVM 13.x but found ${LLVM_CONFIG_VERSION} using ${LLVM_CONFIG_EXE}")
   endif()
 elseif(ZIG_USE_LLVM_CONFIG)
   find_program(LLVM_CONFIG_EXE
-      NAMES llvm-config-12 llvm-config-12.0 llvm-config120 llvm-config12 llvm-config
+      NAMES llvm-config-13 llvm-config-13.0 llvm-config130 llvm-config13 llvm-config
       PATHS
           "/mingw64/bin"
           "/c/msys64/mingw64/bin"
           "c:/msys64/mingw64/bin"
-          "C:/Libraries/llvm-12.0.0/bin")
+          "C:/Libraries/llvm-13.0.0/bin")
 
   if ("${LLVM_CONFIG_EXE}" STREQUAL "LLVM_CONFIG_EXE-NOTFOUND")
     message(FATAL_ERROR "unable to find llvm-config")
@@ -85,14 +85,14 @@ elseif(ZIG_USE_LLVM_CONFIG)
     OUTPUT_VARIABLE LLVM_CONFIG_VERSION
     OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-  if("${LLVM_CONFIG_VERSION}" VERSION_LESS 12)
-    message(FATAL_ERROR "expected LLVM 12.x but found ${LLVM_CONFIG_VERSION} using ${LLVM_CONFIG_EXE}")
+  if("${LLVM_CONFIG_VERSION}" VERSION_LESS 13)
+    message(FATAL_ERROR "expected LLVM 13.x but found ${LLVM_CONFIG_VERSION} using ${LLVM_CONFIG_EXE}")
   endif()
-  if("${LLVM_CONFIG_VERSION}" VERSION_EQUAL 13)
-    message(FATAL_ERROR "expected LLVM 12.x but found ${LLVM_CONFIG_VERSION} using ${LLVM_CONFIG_EXE}")
+  if("${LLVM_CONFIG_VERSION}" VERSION_EQUAL 14)
+    message(FATAL_ERROR "expected LLVM 13.x but found ${LLVM_CONFIG_VERSION} using ${LLVM_CONFIG_EXE}")
   endif()
-  if("${LLVM_CONFIG_VERSION}" VERSION_GREATER 13)
-    message(FATAL_ERROR "expected LLVM 12.x but found ${LLVM_CONFIG_VERSION} using ${LLVM_CONFIG_EXE}")
+  if("${LLVM_CONFIG_VERSION}" VERSION_GREATER 14)
+    message(FATAL_ERROR "expected LLVM 13.x but found ${LLVM_CONFIG_VERSION} using ${LLVM_CONFIG_EXE}")
   endif()
 
   execute_process(
@@ -166,7 +166,7 @@ elseif(ZIG_USE_LLVM_CONFIG)
   set(LLVM_LIBRARIES ${LLVM_LIBRARIES} ${LLVM_SYSTEM_LIBS})
 
   if(NOT LLVM_LIBRARIES)
-    find_library(LLVM_LIBRARIES NAMES LLVM LLVM-12 LLVM-12.0)
+    find_library(LLVM_LIBRARIES NAMES LLVM LLVM-13 LLVM-13.0)
   endif()
 
   link_directories("${CMAKE_PREFIX_PATH}/lib")
@@ -180,11 +180,11 @@ else()
     find_library(LLVM_${_prettylibname_}_LIB NAMES ${_libname_}
       PATHS
       ${LLVM_LIBDIRS}
-      /usr/lib/llvm/12/lib
-      /usr/lib/llvm-12/lib
-      /usr/lib/llvm-12.0/lib
-      /usr/local/llvm120/lib
-      /usr/local/llvm12/lib
+      /usr/lib/llvm/13/lib
+      /usr/lib/llvm-13/lib
+      /usr/lib/llvm-13.0/lib
+      /usr/local/llvm130/lib
+      /usr/local/llvm13/lib
       /mingw64/lib
       /c/msys64/mingw64/lib
       c:\\msys64\\mingw64\\lib)
