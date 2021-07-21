@@ -1065,6 +1065,76 @@ pub fn addCases(ctx: *TestContext) !void {
             ":5:19: error: redeclaration of local constant 'c'",
             ":4:19: note: previous declaration here",
         });
+        case.addError(
+            \\pub fn main() void {
+            \\    var i = 0;
+            \\    for (n) |_, i| {
+            \\    }
+            \\}
+        , &[_][]const u8{
+            ":3:17: error: redeclaration of local variable 'i'",
+            ":2:9: note: previous declaration here",
+        });
+        case.addError(
+            \\pub fn main() void {
+            \\    var i = 0;
+            \\    for (n) |i| {
+            \\    }
+            \\}
+        , &[_][]const u8{
+            ":3:14: error: redeclaration of local variable 'i'",
+            ":2:9: note: previous declaration here",
+        });
+        case.addError(
+            \\pub fn main() void {
+            \\    var i = 0;
+            \\    while (n) |i| {
+            \\    }
+            \\}
+        , &[_][]const u8{
+            ":3:16: error: redeclaration of local variable 'i'",
+            ":2:9: note: previous declaration here",
+        });
+        case.addError(
+            \\pub fn main() void {
+            \\    var i = 0;
+            \\    while (n) |bruh| {
+            \\        _ = bruh;
+            \\    } else |i| {
+            \\
+            \\    }
+            \\}
+        , &[_][]const u8{
+            ":5:13: error: redeclaration of local variable 'i'",
+            ":2:9: note: previous declaration here",
+        });
+        case.addError(
+            \\pub fn main() void {
+            \\    var i = 0;
+            \\    if (true) |i| {}
+            \\}
+        , &[_][]const u8{
+            ":3:16: error: redeclaration of local variable 'i'",
+            ":2:9: note: previous declaration here",
+        });
+        case.addError(
+            \\pub fn main() void {
+            \\    var i = 0;
+            \\    if (true) |i| {} else |e| {}
+            \\}
+        , &[_][]const u8{
+            ":3:16: error: redeclaration of local variable 'i'",
+            ":2:9: note: previous declaration here",
+        });
+        case.addError(
+            \\pub fn main() void {
+            \\    var i = 0;
+            \\    if (true) |_| {} else |i| {}
+            \\}
+        , &[_][]const u8{
+            ":3:28: error: redeclaration of local variable 'i'",
+            ":2:9: note: previous declaration here",
+        });
     }
 
     {
