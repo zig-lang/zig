@@ -56,12 +56,15 @@ const normal_usage =
     \\  test             Create and run a test build
     \\  translate-c      Convert C code to Zig code
     \\
-    \\  ar               Use Zig as a drop-in archiver
     \\  cc               Use Zig as a drop-in C compiler
     \\  c++              Use Zig as a drop-in C++ compiler
+    \\  ld.lld           Use Zig as a drop-in ELF linker (Linux)
+    \\  lld-link         Use Zig as a drop-in COFF linker (Windows)
+    \\  wasm-ld          Use Zig as a drop-in WebAssembly linker
+    \\  ar               Use Zig as a drop-in archiver
+    \\  ranlib           Use Zig as a drop-in ranlib
     \\  dlltool          Use Zig as a drop-in dlltool.exe
     \\  lib              Use Zig as a drop-in lib.exe
-    \\  ranlib           Use Zig as a drop-in ranlib
     \\
     \\  env              Print lib path, std path, cache directory, and version
     \\  help             Print this help and exit
