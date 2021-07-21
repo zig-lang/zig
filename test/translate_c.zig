@@ -3624,4 +3624,10 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         ,
         \\pub export var @"_": c_int = 42;
     });
+
+    cases.add("Macro matching",
+        \\#define FOO(X) (X ## U)
+    , &[_][]const u8{
+        \\pub const FOO = @import("std").zig.c_translation.Macros.U_SUFFIX;
+    });
 }
