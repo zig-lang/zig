@@ -339,19 +339,19 @@ pub const O_RDWR = 0o2;
 pub const kernel_rwf = u32;
 
 /// high priority request, poll if possible
-pub const RWF_HIPRI = kernel_rwf(0x00000001);
+pub const RWF_HIPRI: kernel_rwf = 0x00000001;
 
 /// per-IO O_DSYNC
-pub const RWF_DSYNC = kernel_rwf(0x00000002);
+pub const RWF_DSYNC: kernel_rwf = 0x00000002;
 
 /// per-IO O_SYNC
-pub const RWF_SYNC = kernel_rwf(0x00000004);
+pub const RWF_SYNC: kernel_rwf = 0x00000004;
 
 /// per-IO, return -EAGAIN if operation would block
-pub const RWF_NOWAIT = kernel_rwf(0x00000008);
+pub const RWF_NOWAIT: kernel_rwf = 0x00000008;
 
 /// per-IO O_APPEND
-pub const RWF_APPEND = kernel_rwf(0x00000010);
+pub const RWF_APPEND: kernel_rwf = 0x00000010;
 
 pub const SEEK_SET = 0;
 pub const SEEK_CUR = 1;
