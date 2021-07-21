@@ -1336,7 +1336,7 @@ pub extern "user32" fn AdjustWindowRectEx(lpRect: *RECT, dwStyle: DWORD, bMenu: 
 pub fn adjustWindowRectEx(lpRect: *RECT, dwStyle: u32, bMenu: bool, dwExStyle: u32) !void {
     assert(dwStyle & WS_OVERLAPPED == 0);
 
-    if (AdjustWindowRectEx(lpRect, dwStyle, bMenu, dwExStyle) == 0) {
+    if (AdjustWindowRectEx(lpRect, dwStyle, @boolToInt(bMenu), dwExStyle) == 0) {
         switch (GetLastError()) {
             .INVALID_PARAMETER => unreachable,
             else => |err| return windows.unexpectedError(err),
