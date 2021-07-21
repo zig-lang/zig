@@ -14,6 +14,8 @@ find_path(CLANG_INCLUDE_DIRS NAMES clang/Frontend/ASTUnit.h
     /usr/lib/llvm-12.0/include
     /usr/local/llvm120/include
     /usr/local/llvm12/include
+    /usr/local/opt/llvm@12/include
+    /opt/homebrew/opt/llvm@12/include
     /mingw64/include
 )
 
@@ -30,6 +32,8 @@ if(ZIG_PREFER_CLANG_CPP_DYLIB)
       /usr/lib/llvm-12/lib
       /usr/local/llvm120/lib
       /usr/local/llvm12/lib
+      /usr/local/opt/llvm@12/lib
+      /opt/homebrew/opt/llvm@12/lib
   )
 endif()
 
@@ -44,6 +48,8 @@ if(NOT CLANG_LIBRARIES)
         /usr/lib/llvm-12.0/lib
         /usr/local/llvm120/lib
         /usr/local/llvm12/lib
+        /usr/local/opt/llvm@12/lib
+        /opt/homebrew/opt/llvm@12/lib
         /mingw64/lib
         /c/msys64/mingw64/lib
         c:\\msys64\\mingw64\\lib
