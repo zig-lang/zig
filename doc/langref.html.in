@@ -5337,16 +5337,15 @@ test "implicit cast to comptime_int" {
 }
       {#code_end#}
       {#header_close#}
-      {#header_open|Type Coercion: Arrays and Pointers#}
-      {#code_begin|test|coerce_arrays_and_ptrs#}
+      {#header_open|Type Coercion: Slices, Arrays and Pointers#}
+      {#code_begin|test|coerce__slices_arrays_and_ptrs#}
 const std = @import("std");
 const expect = std.testing.expect;
 
-// This cast exists primarily so that string literals can be
-// passed to functions that accept const slices. However
-// it is probably going to be removed from the language when
-// https://github.com/ziglang/zig/issues/265 is implemented.
-test "[N]T to []const T" {
+// You can assign constant pointers to arrays to a slice with
+// const modifier on the element type. Useful in particular for
+// String literals.
+test "*const [N]T to []const T" {
     var x1: []const u8 = "hello";
     var x2: []const u8 = &[5]u8{ 'h', 'e', 'l', 'l', 111 };
     try expect(std.mem.eql(u8, x1, x2));
@@ -5356,7 +5355,7 @@ test "[N]T to []const T" {
 }
 
 // Likewise, it works when the destination type is an error union.
-test "[N]T to E![]const T" {
+test "*const [N]T to E![]const T" {
     var x1: anyerror![]const u8 = "hello";
     var x2: anyerror![]const u8 = &[5]u8{ 'h', 'e', 'l', 'l', 111 };
     try expect(std.mem.eql(u8, try x1, try x2));
@@ -5366,7 +5365,7 @@ test "[N]T to E![]const T" {
 }
 
 // Likewise, it works when the destination type is an optional.
-test "[N]T to ?[]const T" {
+test "*const [N]T to ?[]const T" {
     var x1: ?[]const u8 = "hello";
     var x2: ?[]const u8 = &[5]u8{ 'h', 'e', 'l', 'l', 111 };
     try expect(std.mem.eql(u8, x1.?, x2.?));
