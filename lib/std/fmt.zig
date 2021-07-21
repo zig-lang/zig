@@ -827,7 +827,7 @@ fn formatSizeImpl(comptime radix: comptime_int) type {
         ) !void {
             _ = fmt;
             if (value == 0) {
-                return writer.writeAll("0B");
+                return formatBuf("0B", options, writer);
             }
 
             const mags_si = " kMGTPEZY";
@@ -845,19 +845,25 @@ fn formatSizeImpl(comptime radix: comptime_int) type {
                 1024 => mags_iec[magnitude],
                 else => unreachable,
             };
-
-            try formatFloatDecimal(new_value, options, writer);
-
+            var fmt_buffer: [64]u8 = undefined; // 64bit int can't be formatted greater than 64 chars
+            var buf_writer = std.io.fixedBufferStream(fmt_buffer[0..]);
+            formatFloatDecimal(new_value, options, buf_writer.writer()) catch unreachable;
+            var end = false;
             if (suffix == ' ') {
-                return writer.writeAll("B");
+                end = true;
+                buf_writer.writer().writeAll("B") catch {};
             }
 
-            const buf = switch (radix) {
-                1000 => &[_]u8{ suffix, 'B' },
-                1024 => &[_]u8{ suffix, 'i', 'B' },
-                else => unreachable,
-            };
-            return writer.writeAll(buf);
+            if (!end) {
+                const buf = switch (radix) {
+                    1000 => &[_]u8{ suffix, 'B' },
+                    1024 => &[_]u8{ suffix, 'i', 'B' },
+                    else => unreachable,
+                };
+                buf_writer.writer().writeAll(buf) catch unreachable;
+            }
+            var writenVal = buf_writer.getWritten();
+            try formatBuf(writenVal, options, writer);
         }
     };
 }
